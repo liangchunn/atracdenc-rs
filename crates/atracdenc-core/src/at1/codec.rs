@@ -194,11 +194,19 @@ impl Processor for Atrac1Decoder {
         assert!(data.len() >= NUM_SAMPLES * channels);
 
         for channel in 0..channels {
-            let frame = self
-                .input
-                .read_frame()
-                .expect("failed to read ATRAC1 frame")
-                .expect("end of ATRAC1 input");
+            let frame = match self.input.read_frame().expect("failed to read ATRAC1 frame") {
+                Some(frame) => frame,
+                None => {
+                    // The original atracdenc decode loop processes whole engine
+                    // blocks, which can round the requested output length up past
+                    // the last physical AEA frame. Emit silence for the missing
+                    // frame instead of panicking so the trailing block completes.
+                    for i in 0..NUM_SAMPLES {
+                        data[i * channels + channel] = 0.0;
+                    }
+                    continue;
+                }
+            };
             let mut bitstream = BitStream::from_bytes(&frame);
             let mode = BlockSizeMod::parse(&mut bitstream);
             let mut specs = vec![0.0; NUM_SAMPLES];

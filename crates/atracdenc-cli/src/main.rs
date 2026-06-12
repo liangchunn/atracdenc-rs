@@ -210,20 +210,27 @@ fn decode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
     })?;
     let input = AeaInput::new(input_file)?;
     let channels = input.channels().max(1);
-    let frames_to_decode =
-        (input.length_in_samples() as usize / atracdenc_core::at1::data::NUM_SAMPLES).max(1);
+    // Match the original atracdenc decode loop: the PCM engine uses a 4096-sample
+    // buffer and the driver keeps calling ApplyProcess while the reported audio
+    // length has not yet been reached (`while totalSamples > processed`). Because
+    // the engine processes whole 4096-sample blocks, the decoder emits the final
+    // block in full, rounding the output length up to the next engine block.
+    // See atracdenc/src/main.cpp:701 and atracdenc/src/pcmengin.h:152.
+    const DECODE_BUFFER_SAMPLES: usize = 4096;
+    let total_samples = input.length_in_samples();
     let writer = WavWriter::create(output_path, channels as u16, 44_100)?;
     let mut engine = PcmEngine::new(
-        atracdenc_core::at1::data::NUM_SAMPLES as u16,
+        DECODE_BUFFER_SAMPLES as u16,
         channels,
         None,
         Some(Box::new(writer)),
     );
     let mut decoder = Atrac1Decoder::new(Box::new(input));
 
-    for _ in 0..frames_to_decode {
+    let mut processed = 0_u64;
+    while total_samples > processed {
         match engine.apply_process(atracdenc_core::at1::data::NUM_SAMPLES, &mut decoder) {
-            Ok(_) => {}
+            Ok(p) => processed = p,
             Err(err) => return Err(invalid_input(format!("PCM processing failed: {err:?}")).into()),
         }
     }

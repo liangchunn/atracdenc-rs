@@ -7,6 +7,8 @@
 use std::f64::consts::PI;
 
 use atracdenc_core::dsp::mdct::{Mdct, Midct};
+use rand::prelude::*;
+use rand::rngs::StdRng;
 
 /// Matches `CalcEps` in `mdct_ut_common.h`: magnitude * 10^(-114/20).
 fn calc_eps(magn: f32) -> f32 {
@@ -49,15 +51,10 @@ fn reference_midct(x: &[f32], n: usize) -> Vec<f32> {
     res
 }
 
-/// Deterministic uniform fill in [-32768, 32767]. The C++ test seeds an
-/// std::mt19937; here the assertion is fast-vs-naive equality so any
-/// deterministic sequence works (per agreed test methodology).
 fn fill_random(dst: &mut [f32], seed: u32) {
-    let mut state = seed;
+    let mut rng = StdRng::seed_from_u64(seed as u64);
     for x in dst {
-        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        let unit = (state as f32) / (u32::MAX as f32);
-        *x = -32768.0 + unit * 65535.0;
+        *x = rng.gen_range(-32768.0..32768.0);
     }
 }
 

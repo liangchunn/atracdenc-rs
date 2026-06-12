@@ -12,6 +12,8 @@ use atracdenc_core::{
     atrac::psy::{ENERGY_FLOOR, calc_spectral_flatness_per_bfu},
     dsp::mdct::Mdct,
 };
+use rand::prelude::*;
+use rand::rngs::StdRng;
 
 const PI: f32 = std::f32::consts::PI;
 const SAMPLE_RATE: f32 = 44_100.0;
@@ -85,28 +87,19 @@ fn weighted_mean(values: &[f32], weights: &[f32]) -> f32 {
         / wsum
 }
 
-/// Deterministic standard-normal-ish noise via Box-Muller. The flatness tests
-/// assert margins, not golden values, so an exact std::mt19937 match is not
-/// required.
 struct Noise {
-    state: u64,
+    rng: StdRng,
 }
 
 impl Noise {
     fn new(seed: u64) -> Self {
         Self {
-            state: seed ^ 0x9E37_79B9_7F4A_7C15,
+            rng: StdRng::seed_from_u64(seed),
         }
     }
 
     fn next_uniform(&mut self) -> f32 {
-        // SplitMix64.
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        ((z >> 11) as f32) / ((1u64 << 53) as f32)
+        self.rng.r#gen()
     }
 
     fn next_gaussian(&mut self) -> f32 {

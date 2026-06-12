@@ -115,9 +115,9 @@ Phases 02–06 are independently testable; codecs (07–09) land one at a time w
 
 Update this as phases complete:
 
-- [ ] 01 Workspace setup
-- [ ] 02 Foundations: bitstream, bit-alloc framework, util
-- [ ] 03 DSP transforms: MDCT/IMDCT, DCT-IV, QMF
+- [x] 01 Workspace setup
+- [x] 02 Foundations: bitstream, bit-alloc framework, util
+- [x] 03 DSP transforms: MDCT/IMDCT, DCT-IV, QMF
 - [ ] 04 DSP dynamics: gain processor, transient detector, spectral upsampler
 - [ ] 05 Shared ATRAC: scaler/quantizer, psy helpers
 - [ ] 06 PCM engine, WAV IO, containers

@@ -1,6 +1,14 @@
-[package]
-name = "atracdenc"
+[workspace]
+resolver = "3"
+members = ["crates/atracdenc-core", "crates/atracdenc-cli"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "LGPL-2.1-or-later"
+repository = ""
 
-[dependencies]
+[workspace.dependencies]
+rustfft = "6.4.1"
+hound = "3.5.1"
+clap = { version = "4.5.40", features = ["derive"] }

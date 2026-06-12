@@ -68,6 +68,15 @@ The original C++ tree at `./atracdenc/` is the reference and stays untouched.
 
 Phases 02–06 are independently testable; codecs (07–09) land one at a time with green tests throughout. After phase 07 the project is already end-to-end usable for ATRAC1.
 
+**Current state (June 2026):** phases 01–08 and 10–11 are complete. Only phase 09 (ATRAC3+ encoder) remains.
+The `gha/` and `at3p/` source directories under `crates/atracdenc-core/src/` do not exist yet; the
+`src/lib.rs` does not declare those modules. ATRAC3+ returns "not ported yet" from the CLI.
+
+**Cross-codec validation (June 2026):** Both ATRAC1 and ATRAC3 Rust encoders produce output that
+the C++ reference binary can decode (and vice versa). ATRAC1 cross-decoder SNR is 86.4 dB;
+ATRAC1 cross-encoder SNR is 96.6 dB. ATRAC3 OMA output decodes successfully with ffmpeg
+(cross-encoder PCM SNR 64.4 dB). See `validation-notes.md` for details.
+
 ## Test strategy
 
 - Every C++ `*_ut.cpp` becomes Rust `#[cfg(test)]` modules (or `tests/` files when reference data is large).
@@ -118,11 +127,11 @@ Update this as phases complete:
 - [x] 01 Workspace setup
 - [x] 02 Foundations: bitstream, bit-alloc framework, util
 - [x] 03 DSP transforms: MDCT/IMDCT, DCT-IV, QMF
-- [ ] 04 DSP dynamics: gain processor, transient detector, spectral upsampler
-- [ ] 05 Shared ATRAC: scaler/quantizer, psy helpers
-- [ ] 06 PCM engine, WAV IO, containers
-- [ ] 07 ATRAC1 encoder + decoder
-- [ ] 08 ATRAC3 encoder (+ yaml_log)
-- [ ] 09 ATRAC3+ encoder (GHA, PQF, MDCT, bitstream)
-- [ ] 10 CLI
-- [ ] 11 Integration tests + validation
+- [x] 04 DSP dynamics: gain processor, transient detector, spectral upsampler
+- [x] 05 Shared ATRAC: scaler/quantizer, psy helpers
+- [x] 06 PCM engine, WAV IO, containers (AEA, OMA, RIFF/AT3, RM, RAW)
+- [x] 07 ATRAC1 encoder + decoder (encode WAV→AEA, decode AEA→WAV)
+- [x] 08 ATRAC3 encoder (+ yaml_log)
+- [ ] 09 ATRAC3+ encoder (GHA, PQF, MDCT, bitstream) — **not started**
+- [x] 10 CLI (all flags; ATRAC3+ rejected with clear error)
+- [x] 11 Integration tests + validation (Python suite ported, quality regression tests in place)

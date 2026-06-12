@@ -262,7 +262,7 @@ fn build_encoder(
         Codec::Atrac3 | Codec::Atrac3Lp4 => {
             let bitrate = match (codec, opts.bitrate) {
                 (Codec::Atrac3Lp4, None) => LP4.bitrate,
-                (_, bitrate) => bitrate.unwrap_or(0),
+                (_, bitrate) => bitrate.unwrap_or(0) * 1024,
             };
             let settings = At3EncodeSettings::new(
                 bitrate,

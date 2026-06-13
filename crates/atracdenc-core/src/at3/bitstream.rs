@@ -520,10 +520,7 @@ fn encode_specs(
     }
 }
 
-fn configure_and_encode_specs(
-    ctx: &mut EncodeCtx<'_>,
-    bitstream: &mut BitStream,
-) {
+fn configure_and_encode_specs(ctx: &mut EncodeCtx<'_>, bitstream: &mut BitStream) {
     let sce = ctx.sce.expect("ATRAC3 encode context missing SCE");
 
     if sce.scaled_blocks.is_empty() {
@@ -982,8 +979,7 @@ mod tests {
     #[test]
     fn empty_lp2_mono_sound_unit_duplicates_first_channel() {
         let mut writer = Atrac3BitStreamWriter::new(crate::at3::data::LP2, 0);
-        let frame = writer
-            .build_sound_unit_frame(&[SingleChannelElement::new(4)], 1.0);
+        let frame = writer.build_sound_unit_frame(&[SingleChannelElement::new(4)], 1.0);
         let half = crate::at3::data::LP2.frame_sz as usize / 2;
 
         assert_eq!(crate::at3::data::LP2.frame_sz as usize, frame.len());
@@ -994,11 +990,10 @@ mod tests {
     #[test]
     fn empty_lp4_joint_stereo_reverses_second_channel_region() {
         let mut writer = Atrac3BitStreamWriter::new(crate::at3::data::LP4, 0);
-        let frame = writer
-            .build_sound_unit_frame(
-                &[SingleChannelElement::new(4), SingleChannelElement::new(4)],
-                1.0,
-            );
+        let frame = writer.build_sound_unit_frame(
+            &[SingleChannelElement::new(4), SingleChannelElement::new(4)],
+            1.0,
+        );
 
         assert_eq!(crate::at3::data::LP4.frame_sz as usize, frame.len());
         assert_eq!(0xA3, frame[0]);

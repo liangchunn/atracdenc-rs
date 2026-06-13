@@ -80,12 +80,10 @@ impl<W: Write + Seek> At3Output<W> {
         num_frames: u32,
         frame_size: u32,
     ) -> Result<Self, ContainerError> {
-        let channels_u16 = u16::try_from(channels).map_err(|_| {
-            ContainerError::InvalidInput("too many ATRAC3plus channels")
-        })?;
-        let frame_size_u16 = u16::try_from(frame_size).map_err(|_| {
-            ContainerError::InvalidInput("ATRAC3plus frame size too large")
-        })?;
+        let channels_u16 = u16::try_from(channels)
+            .map_err(|_| ContainerError::InvalidInput("too many ATRAC3plus channels"))?;
+        let frame_size_u16 = u16::try_from(frame_size)
+            .map_err(|_| ContainerError::InvalidInput("ATRAC3plus frame size too large"))?;
         let mut header = Vec::with_capacity(AT3P_HEADER_SIZE);
         let file_size = AT3P_HEADER_SIZE as u64 + u64::from(num_frames) * u64::from(frame_size);
         if file_size >= u64::from(u32::MAX) {

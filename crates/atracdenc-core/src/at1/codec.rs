@@ -1,4 +1,5 @@
 use crate::{
+    AtracdencError,
     at1::{
         bitalloc::Atrac1BitAllocator,
         data::{
@@ -18,7 +19,6 @@ use crate::{
     dsp::transient::TransientDetector,
     pcm::engine::{ProcessMeta, ProcessResult, Processor},
     util::inverted_spectr,
-    AtracdencError,
 };
 
 const LOUD_FACTOR: f32 = 0.006;

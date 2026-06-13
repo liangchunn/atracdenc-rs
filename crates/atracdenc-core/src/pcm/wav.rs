@@ -114,9 +114,9 @@ impl PcmWriter for WavWriter {
                 to_int(clipped * scale_factor).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
             writer.write_sample(encoded);
         }
-        writer
-            .flush()
-            .map_err(|e| AtracdencError::from(PcmEngineError::Io(std::io::Error::other(e.to_string()))))?;
+        writer.flush().map_err(|e| {
+            AtracdencError::from(PcmEngineError::Io(std::io::Error::other(e.to_string())))
+        })?;
         Ok(())
     }
 }

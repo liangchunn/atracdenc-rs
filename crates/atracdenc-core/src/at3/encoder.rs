@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use crate::{
+    AtracdencError,
     at3::{
         bitstream::{Atrac3BitStreamWriter, SingleChannelElement, TonalBlock},
         data::{
@@ -25,7 +26,6 @@ use crate::{
         upsampler::SpectralUpsampler,
     },
     pcm::engine::{ProcessMeta, ProcessResult, Processor},
-    AtracdencError,
 };
 
 pub const LOUD_FACTOR: f32 = 0.006;

@@ -1,4 +1,6 @@
-use std::fmt;
+use std::io;
+
+use crate::AtracdencError;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ProcessResult {
@@ -6,67 +8,16 @@ pub enum ProcessResult {
     Processed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PcmEngineError {
+    #[error("channel mismatch")]
     ChannelMismatch,
+    #[error("no data to read")]
     NoDataToRead,
-    DataNotReady,
-    Io(std::io::Error),
+    #[error("I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("internal state error")]
     InternalState,
-}
-
-impl Clone for PcmEngineError {
-    fn clone(&self) -> Self {
-        match self {
-            Self::ChannelMismatch => Self::ChannelMismatch,
-            Self::NoDataToRead => Self::NoDataToRead,
-            Self::DataNotReady => Self::DataNotReady,
-            Self::Io(e) => Self::Io(std::io::Error::new(e.kind(), e.to_string())),
-            Self::InternalState => Self::InternalState,
-        }
-    }
-}
-
-impl PartialEq for PcmEngineError {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::ChannelMismatch, Self::ChannelMismatch)
-            | (Self::NoDataToRead, Self::NoDataToRead)
-            | (Self::DataNotReady, Self::DataNotReady)
-            | (Self::InternalState, Self::InternalState) => true,
-            (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
-            _ => false,
-        }
-    }
-}
-
-impl Eq for PcmEngineError {}
-
-impl fmt::Display for PcmEngineError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ChannelMismatch => write!(f, "channel mismatch"),
-            Self::NoDataToRead => write!(f, "no data to read"),
-            Self::DataNotReady => write!(f, "data not ready"),
-            Self::Io(e) => write!(f, "I/O error: {e}"),
-            Self::InternalState => write!(f, "internal state error"),
-        }
-    }
-}
-
-impl std::error::Error for PcmEngineError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<std::io::Error> for PcmEngineError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -123,11 +74,11 @@ impl PcmBuffer {
 }
 
 pub trait PcmReader {
-    fn read(&mut self, data: &mut PcmBuffer, size: u32) -> Result<bool, PcmEngineError>;
+    fn read(&mut self, data: &mut PcmBuffer, size: u32) -> Result<bool, AtracdencError>;
 }
 
 pub trait PcmWriter {
-    fn write(&mut self, data: &PcmBuffer, size: u32) -> Result<(), PcmEngineError>;
+    fn write(&mut self, data: &PcmBuffer, size: u32) -> Result<(), AtracdencError>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -140,7 +91,7 @@ pub trait Processor {
         &mut self,
         data: &mut [f32],
         meta: &ProcessMeta,
-    ) -> std::io::Result<ProcessResult>;
+    ) -> Result<ProcessResult, AtracdencError>;
 }
 
 pub struct PcmEngine {
@@ -171,12 +122,12 @@ impl PcmEngine {
         &mut self,
         step: usize,
         processor: &mut dyn Processor,
-    ) -> Result<u64, PcmEngineError> {
+    ) -> Result<u64, AtracdencError> {
         if step == 0 {
-            return Err(PcmEngineError::InternalState);
+            return Err(PcmEngineError::InternalState.into());
         }
         if step > self.buffer.size() {
-            return Err(PcmEngineError::InternalState);
+            return Err(PcmEngineError::InternalState.into());
         }
 
         let mut drain = false;
@@ -187,7 +138,7 @@ impl PcmEngine {
                 if self.to_drain != 0 {
                     drain = true;
                 } else {
-                    return Err(PcmEngineError::NoDataToRead);
+                    return Err(PcmEngineError::NoDataToRead.into());
                 }
             }
         }
@@ -207,7 +158,7 @@ impl PcmEngine {
                 }
             } else {
                 if drain {
-                    return Err(PcmEngineError::InternalState);
+                    return Err(PcmEngineError::InternalState.into());
                 }
                 self.to_drain += 1;
             }
@@ -232,9 +183,9 @@ mod tests {
     }
 
     impl PcmReader for VecReader {
-        fn read(&mut self, data: &mut PcmBuffer, size: u32) -> Result<bool, PcmEngineError> {
+        fn read(&mut self, data: &mut PcmBuffer, size: u32) -> Result<bool, AtracdencError> {
             if data.channels() as usize != self.channels {
-                return Err(PcmEngineError::ChannelMismatch);
+                return Err(PcmEngineError::ChannelMismatch.into());
             }
             let Some(chunk) = self.chunks.first().cloned() else {
                 return Ok(false);
@@ -255,7 +206,7 @@ mod tests {
     }
 
     impl PcmWriter for VecWriter {
-        fn write(&mut self, data: &PcmBuffer, size: u32) -> Result<(), PcmEngineError> {
+        fn write(&mut self, data: &PcmBuffer, size: u32) -> Result<(), AtracdencError> {
             self.data
                 .extend_from_slice(&data.samples()[..size as usize * data.channels() as usize]);
             Ok(())
@@ -271,7 +222,7 @@ mod tests {
             &mut self,
             data: &mut [f32],
             _meta: &ProcessMeta,
-        ) -> std::io::Result<ProcessResult> {
+        ) -> Result<ProcessResult, AtracdencError> {
             self.calls += 1;
             data[0] += 1.0;
             if self.calls == 1 {
@@ -294,9 +245,12 @@ mod tests {
 
         assert_eq!(3, engine.apply_process(1, &mut proc).unwrap());
         assert_eq!(4, engine.apply_process(1, &mut proc).unwrap());
-        assert_eq!(
-            Err(PcmEngineError::NoDataToRead),
-            engine.apply_process(1, &mut proc)
+        assert!(
+            matches!(
+                engine.apply_process(1, &mut proc),
+                Err(AtracdencError::PcmEngine(PcmEngineError::NoDataToRead))
+            ),
+            "expected NoDataToRead error"
         );
     }
 }

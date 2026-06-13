@@ -1,6 +1,6 @@
-use std::io::{self, Write};
+use std::io::Write;
 
-use super::CompressedOutput;
+use super::{CompressedOutput, ContainerError};
 
 pub struct RawOutput<W: Write> {
     inner: W,
@@ -23,14 +23,15 @@ impl<W: Write> RawOutput<W> {
 }
 
 impl<W: Write> CompressedOutput for RawOutput<W> {
-    fn write_frame(&mut self, data: &[u8]) -> io::Result<()> {
+    fn write_frame(&mut self, data: &[u8]) -> Result<(), ContainerError> {
         if let Some(frame_size) = self.frame_size {
             let mut frame = data.to_vec();
             frame.resize(frame_size, 0);
-            self.inner.write_all(&frame)
+            self.inner.write_all(&frame)?;
         } else {
-            self.inner.write_all(data)
+            self.inner.write_all(data)?;
         }
+        Ok(())
     }
 
     fn name(&self) -> &str {

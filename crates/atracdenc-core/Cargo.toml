@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 hound = { workspace = true }
 rustfft = { workspace = true }
+thiserror = "2.0.18"
 
 [dev-dependencies]
 rand = "0.10.1"

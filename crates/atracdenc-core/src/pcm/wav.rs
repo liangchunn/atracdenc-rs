@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::{
+    AtracdencError,
     pcm::engine::{PcmBuffer, PcmEngineError, PcmReader, PcmWriter},
     util::to_int,
 };
@@ -39,9 +40,9 @@ impl WavReader {
 }
 
 impl PcmReader for WavReader {
-    fn read(&mut self, data: &mut PcmBuffer, size: u32) -> Result<bool, PcmEngineError> {
+    fn read(&mut self, data: &mut PcmBuffer, size: u32) -> Result<bool, AtracdencError> {
         if data.channels() != self.spec.channels {
-            return Err(PcmEngineError::ChannelMismatch);
+            return Err(PcmEngineError::ChannelMismatch.into());
         }
 
         let total = size as usize * self.spec.channels as usize;
@@ -53,7 +54,7 @@ impl PcmReader for WavReader {
                     read += 1;
                 }
                 Some(Err(e)) => {
-                    return Err(PcmEngineError::Io(std::io::Error::other(e.to_string())));
+                    return Err(PcmEngineError::Io(std::io::Error::other(e.to_string())).into());
                 }
                 None => break,
             }
@@ -93,9 +94,9 @@ impl WavWriter {
 }
 
 impl PcmWriter for WavWriter {
-    fn write(&mut self, data: &PcmBuffer, size: u32) -> Result<(), PcmEngineError> {
+    fn write(&mut self, data: &PcmBuffer, size: u32) -> Result<(), AtracdencError> {
         if data.channels() != self.channels {
-            return Err(PcmEngineError::ChannelMismatch);
+            return Err(PcmEngineError::ChannelMismatch.into());
         }
 
         let total = size as usize * data.channels() as usize;
@@ -115,7 +116,7 @@ impl PcmWriter for WavWriter {
         }
         writer
             .flush()
-            .map_err(|e| PcmEngineError::Io(std::io::Error::other(e.to_string())))?;
+            .map_err(|e| AtracdencError::from(PcmEngineError::Io(std::io::Error::other(e.to_string()))))?;
         Ok(())
     }
 }

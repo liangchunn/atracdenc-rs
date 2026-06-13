@@ -1,6 +1,6 @@
 use std::io::{self, Seek, SeekFrom, Write};
 
-use super::CompressedOutput;
+use super::{CompressedOutput, ContainerError};
 
 const WAVE_SAMPLE_RATE: u32 = 44_100;
 const AT3_SAMPLES_PER_FRAME: u32 = 1024;
@@ -33,14 +33,11 @@ impl<W: Write + Seek> At3Output<W> {
         num_frames: u32,
         frame_size: u32,
         joint_stereo: bool,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, ContainerError> {
         let mut header = Vec::with_capacity(AT3_HEADER_SIZE);
         let file_size = AT3_HEADER_SIZE as u64 + u64::from(num_frames) * u64::from(frame_size);
         if file_size >= u64::from(u32::MAX) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "RIFF file too large",
-            ));
+            return Err(ContainerError::InvalidInput("RIFF file too large"));
         }
         write_riff_prefix(&mut header, (file_size - 8) as u32, 32);
         push_u16(&mut header, 0x0270);
@@ -82,23 +79,17 @@ impl<W: Write + Seek> At3Output<W> {
         channels: usize,
         num_frames: u32,
         frame_size: u32,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, ContainerError> {
         let channels_u16 = u16::try_from(channels).map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidInput, "too many ATRAC3plus channels")
+            ContainerError::InvalidInput("too many ATRAC3plus channels")
         })?;
         let frame_size_u16 = u16::try_from(frame_size).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "ATRAC3plus frame size too large",
-            )
+            ContainerError::InvalidInput("ATRAC3plus frame size too large")
         })?;
         let mut header = Vec::with_capacity(AT3P_HEADER_SIZE);
         let file_size = AT3P_HEADER_SIZE as u64 + u64::from(num_frames) * u64::from(frame_size);
         if file_size >= u64::from(u32::MAX) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "RIFF file too large",
-            ));
+            return Err(ContainerError::InvalidInput("RIFF file too large"));
         }
         write_riff_prefix(&mut header, (file_size - 8) as u32, 40);
         push_u16(&mut header, 0xfffe);
@@ -130,7 +121,7 @@ impl<W: Write + Seek> At3Output<W> {
         })
     }
 
-    pub fn finalize(&mut self) -> io::Result<()> {
+    pub fn finalize(&mut self) -> Result<(), ContainerError> {
         let (header_size, samples_per_frame, total_offset, data_offset) = match self.kind {
             At3Kind::Atrac3 { .. } => (AT3_HEADER_SIZE, AT3_SAMPLES_PER_FRAME, 60_u64, 72_u64),
             At3Kind::Atrac3Plus => (AT3P_HEADER_SIZE, AT3P_SAMPLES_PER_FRAME, 68_u64, 76_u64),
@@ -158,23 +149,20 @@ impl<W: Write + Seek> At3Output<W> {
         Ok(())
     }
 
-    pub fn into_inner(mut self) -> io::Result<W> {
+    pub fn into_inner(mut self) -> Result<W, ContainerError> {
         self.finalize()?;
-        Ok(self.inner.take().expect("AT3 output inner already taken"))
+        self.inner.take().ok_or(ContainerError::AlreadyConsumed)
     }
 }
 
 impl<W: Write + Seek> CompressedOutput for At3Output<W> {
-    fn write_frame(&mut self, data: &[u8]) -> io::Result<()> {
+    fn write_frame(&mut self, data: &[u8]) -> Result<(), ContainerError> {
         if data.len() != self.frame_size as usize {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "unexpected AT3 frame size",
-            ));
+            return Err(ContainerError::InvalidInput("unexpected AT3 frame size"));
         }
         self.inner
             .as_mut()
-            .expect("AT3 output inner already taken")
+            .ok_or(ContainerError::AlreadyConsumed)?
             .write_all(data)?;
         self.frames_written += 1;
         Ok(())
@@ -264,14 +252,14 @@ mod tests {
     #[test]
     fn atrac3plus_rejects_oversized_u16_fields() {
         assert_eq!(
-            "too many ATRAC3plus channels",
+            "invalid input: too many ATRAC3plus channels",
             At3Output::atrac3plus(Cursor::new(Vec::new()), usize::from(u16::MAX) + 1, 0, 376)
                 .err()
                 .unwrap()
                 .to_string()
         );
         assert_eq!(
-            "ATRAC3plus frame size too large",
+            "invalid input: ATRAC3plus frame size too large",
             At3Output::atrac3plus(Cursor::new(Vec::new()), 2, 0, u32::from(u16::MAX) + 1)
                 .err()
                 .unwrap()

@@ -18,6 +18,7 @@ use crate::{
     dsp::transient::TransientDetector,
     pcm::engine::{ProcessMeta, ProcessResult, Processor},
     util::inverted_spectr,
+    AtracdencError,
 };
 
 const LOUD_FACTOR: f32 = 0.006;
@@ -78,7 +79,7 @@ impl Processor for Atrac1Encoder {
         &mut self,
         data: &mut [f32],
         _meta: &ProcessMeta,
-    ) -> std::io::Result<ProcessResult> {
+    ) -> Result<ProcessResult, AtracdencError> {
         let channels = self.channels();
         assert!(data.len() >= NUM_SAMPLES * channels);
         let mut window_masks = vec![0_u32; channels];
@@ -199,7 +200,7 @@ impl Processor for Atrac1Decoder {
         &mut self,
         data: &mut [f32],
         _meta: &ProcessMeta,
-    ) -> std::io::Result<ProcessResult> {
+    ) -> Result<ProcessResult, AtracdencError> {
         let channels = self.channels();
         assert!(data.len() >= NUM_SAMPLES * channels);
 
@@ -276,7 +277,10 @@ mod tests {
 
     use super::*;
     use crate::container::aea::{AeaInput, AeaOutput};
-    use crate::pcm::engine::{PcmBuffer, PcmEngine, PcmEngineError, PcmReader, PcmWriter};
+    use crate::{
+        container::ContainerError,
+        pcm::engine::{PcmBuffer, PcmEngine, PcmReader, PcmWriter},
+    };
 
     #[derive(Clone, Default)]
     struct SharedOutput {
@@ -285,7 +289,7 @@ mod tests {
     }
 
     impl CompressedOutput for SharedOutput {
-        fn write_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
+        fn write_frame(&mut self, data: &[u8]) -> Result<(), ContainerError> {
             self.frames.borrow_mut().push(data.to_vec());
             Ok(())
         }
@@ -306,7 +310,7 @@ mod tests {
     }
 
     impl CompressedInput for MemoryInput {
-        fn read_frame(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+        fn read_frame(&mut self) -> Result<Option<Vec<u8>>, ContainerError> {
             let frame = self.frames.get(self.pos).cloned();
             self.pos += usize::from(frame.is_some());
             Ok(frame)
@@ -336,7 +340,7 @@ mod tests {
     }
 
     impl PcmReader for BlockReader {
-        fn read(&mut self, data: &mut PcmBuffer, size: u32) -> Result<bool, PcmEngineError> {
+        fn read(&mut self, data: &mut PcmBuffer, size: u32) -> Result<bool, AtracdencError> {
             assert_eq!(NUM_SAMPLES, size as usize);
             assert_eq!(self.channels, data.channels() as usize);
             let Some(frame) = self.frames.get(self.pos) else {
@@ -354,7 +358,7 @@ mod tests {
     }
 
     impl PcmWriter for CollectWriter {
-        fn write(&mut self, data: &PcmBuffer, size: u32) -> Result<(), PcmEngineError> {
+        fn write(&mut self, data: &PcmBuffer, size: u32) -> Result<(), AtracdencError> {
             self.frames
                 .borrow_mut()
                 .push(data.samples()[..size as usize * data.channels() as usize].to_vec());

@@ -6,6 +6,7 @@ use std::{
 };
 
 use atracdenc_core::{
+    AtracdencError,
     at1::{
         codec::{Atrac1Decoder, Atrac1Encoder},
         data::{EncodeSettings as At1EncodeSettings, WindowMode},
@@ -178,8 +179,8 @@ fn encode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
     loop {
         match engine.apply_process(frame_samples(codec), processor.as_mut()) {
             Ok(_) => {}
-            Err(PcmEngineError::NoDataToRead) => break,
-            Err(err) => return Err(invalid_input(format!("PCM processing failed: {err}")).into()),
+            Err(AtracdencError::PcmEngine(PcmEngineError::NoDataToRead)) => break,
+            Err(err) => return Err(err.into()),
         }
     }
 
@@ -238,7 +239,7 @@ fn decode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
     while total_samples > processed {
         match engine.apply_process(atracdenc_core::at1::data::NUM_SAMPLES, &mut decoder) {
             Ok(p) => processed = p,
-            Err(err) => return Err(invalid_input(format!("PCM processing failed: {err}")).into()),
+            Err(err) => return Err(err.into()),
         }
     }
 

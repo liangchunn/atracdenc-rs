@@ -25,6 +25,7 @@ use crate::{
         upsampler::SpectralUpsampler,
     },
     pcm::engine::{ProcessMeta, ProcessResult, Processor},
+    AtracdencError,
 };
 
 pub const LOUD_FACTOR: f32 = 0.006;
@@ -366,7 +367,7 @@ impl Processor for Atrac3Encoder {
         &mut self,
         data: &mut [f32],
         meta: &ProcessMeta,
-    ) -> std::io::Result<ProcessResult> {
+    ) -> Result<ProcessResult, AtracdencError> {
         let channels = usize::from(meta.channels).clamp(1, self.channels());
         assert!(channels <= 2);
         assert!(data.len() >= NUM_SAMPLES * channels);
@@ -771,7 +772,7 @@ mod tests {
         bitstream::{Atrac3BitStreamWriter, SingleChannelElement},
         data::{LP2, SCALE_TABLE},
     };
-    use crate::container::CompressedOutput;
+    use crate::container::{CompressedOutput, ContainerError};
 
     #[derive(Clone, Default)]
     struct SharedOutput {
@@ -785,7 +786,7 @@ mod tests {
     }
 
     impl CompressedOutput for SharedOutput {
-        fn write_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
+        fn write_frame(&mut self, data: &[u8]) -> Result<(), ContainerError> {
             self.frames.borrow_mut().push(data.to_vec());
             Ok(())
         }
@@ -886,7 +887,7 @@ mod tests {
         map_tonal_components(&scaler, &tonals, &mut sce.tonal_blocks);
 
         let mut writer = Atrac3BitStreamWriter::new(LP2, 0);
-        let frame = writer.build_sound_unit_frame(&[sce], 1.0).unwrap();
+        let frame = writer.build_sound_unit_frame(&[sce], 1.0);
         assert_eq!(LP2.frame_sz as usize, frame.len());
     }
 

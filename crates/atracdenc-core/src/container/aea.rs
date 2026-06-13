@@ -1,6 +1,6 @@
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
-use super::{CompressedInput, CompressedOutput};
+use super::{CompressedInput, CompressedOutput, ContainerError};
 
 pub const AEA_META_SIZE: usize = 2048;
 pub const AEA_FRAME_SIZE: usize = 212;
@@ -25,7 +25,7 @@ impl<W: Write + Seek> AeaOutput<W> {
         title: &str,
         num_channels: usize,
         num_frames: u32,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, ContainerError> {
         let mut header = [0_u8; AEA_META_SIZE];
         header[0..4].copy_from_slice(&[0x00, 0x08, 0x00, 0x00]);
         let title_bytes = title.as_bytes();
@@ -46,7 +46,7 @@ impl<W: Write + Seek> AeaOutput<W> {
         })
     }
 
-    pub fn finalize(&mut self) -> io::Result<()> {
+    pub fn finalize(&mut self) -> Result<(), ContainerError> {
         self.header[260..264].copy_from_slice(&self.written_frames.to_ne_bytes());
         let Some(inner) = &mut self.inner else {
             return Ok(());
@@ -58,9 +58,9 @@ impl<W: Write + Seek> AeaOutput<W> {
         Ok(())
     }
 
-    pub fn into_inner(mut self) -> io::Result<W> {
+    pub fn into_inner(mut self) -> Result<W, ContainerError> {
         self.finalize()?;
-        Ok(self.inner.take().expect("AEA output inner already taken"))
+        self.inner.take().ok_or(ContainerError::AlreadyConsumed)
     }
 }
 
@@ -71,7 +71,7 @@ impl<W: Write + Seek> Drop for AeaOutput<W> {
 }
 
 impl<W: Write + Seek> CompressedOutput for AeaOutput<W> {
-    fn write_frame(&mut self, data: &[u8]) -> io::Result<()> {
+    fn write_frame(&mut self, data: &[u8]) -> Result<(), ContainerError> {
         if self.first_write {
             self.first_write = false;
             return Ok(());
@@ -81,7 +81,7 @@ impl<W: Write + Seek> CompressedOutput for AeaOutput<W> {
         frame.resize(AEA_FRAME_SIZE, 0);
         self.inner
             .as_mut()
-            .expect("AEA output inner already taken")
+            .ok_or(ContainerError::AlreadyConsumed)?
             .write_all(&frame)?;
         self.written_frames += 1;
         Ok(())
@@ -103,14 +103,11 @@ pub struct AeaInput<R: Read + Seek> {
 }
 
 impl<R: Read + Seek> AeaInput<R> {
-    pub fn new(mut inner: R) -> io::Result<Self> {
+    pub fn new(mut inner: R) -> Result<Self, ContainerError> {
         let mut header = [0_u8; AEA_META_SIZE];
         inner.read_exact(&mut header)?;
         if header[0..4] != [0x00, 0x08, 0x00, 0x00] || header[264] >= 3 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid AEA header",
-            ));
+            return Err(ContainerError::InvalidInput("invalid AEA header"));
         }
         let end = inner.seek(SeekFrom::End(0))?;
         inner.seek(SeekFrom::Start(AEA_META_SIZE as u64))?;
@@ -123,12 +120,12 @@ impl<R: Read + Seek> AeaInput<R> {
 }
 
 impl<R: Read + Seek> CompressedInput for AeaInput<R> {
-    fn read_frame(&mut self) -> io::Result<Option<Vec<u8>>> {
+    fn read_frame(&mut self) -> Result<Option<Vec<u8>>, ContainerError> {
         let mut frame = vec![0_u8; AEA_FRAME_SIZE];
         match self.inner.read_exact(&mut frame) {
             Ok(()) => Ok(Some(frame)),
             Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
-            Err(err) => Err(err),
+            Err(err) => Err(ContainerError::Io(err)),
         }
     }
 

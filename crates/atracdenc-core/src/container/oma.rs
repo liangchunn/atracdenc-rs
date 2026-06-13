@@ -1,6 +1,6 @@
-use std::io::{self, Write};
+use std::io::Write;
 
-use super::CompressedOutput;
+use super::{CompressedOutput, ContainerError};
 
 pub const OMA_HEADER_SIZE: usize = 96;
 
@@ -22,17 +22,14 @@ pub enum OmaChannelFormat {
     Channels8 = 7,
 }
 
-fn sample_rate_idx(sample_rate: u32) -> io::Result<u32> {
+fn sample_rate_idx(sample_rate: u32) -> Result<u32, ContainerError> {
     match sample_rate {
         32_000 => Ok(0),
         44_100 => Ok(1),
         48_000 => Ok(2),
         88_200 => Ok(3),
         96_000 => Ok(4),
-        _ => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "unsupported OMA sample rate",
-        )),
+        _ => Err(ContainerError::UnsupportedSampleRate),
     }
 }
 
@@ -54,7 +51,7 @@ fn params(
     sample_rate: u32,
     channel_format: OmaChannelFormat,
     frame_size: u32,
-) -> io::Result<u32> {
+) -> Result<u32, ContainerError> {
     let sr_idx = sample_rate_idx(sample_rate)?;
     match codec {
         OmaCodec::Atrac3 => {
@@ -62,28 +59,21 @@ fn params(
                 channel_format,
                 OmaChannelFormat::Stereo | OmaChannelFormat::StereoJoint
             ) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
+                return Err(ContainerError::InvalidInput(
                     "ATRAC3 OMA requires stereo channel format",
                 ));
             }
             let js = u32::from(channel_format == OmaChannelFormat::StereoJoint);
             let frame_units = frame_size / 8;
             if frame_units > 0x3ff {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "OMA frame too large",
-                ));
+                return Err(ContainerError::InvalidInput("OMA frame too large"));
             }
             Ok((js << 17) | (sr_idx << 13) | frame_units)
         }
         OmaCodec::Atrac3Plus => {
             let frame_units = (frame_size - 8) / 8;
             if frame_units > 0x3ff {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "OMA frame too large",
-                ));
+                return Err(ContainerError::InvalidInput("OMA frame too large"));
             }
             Ok(
                 (1 << 24)
@@ -109,7 +99,7 @@ impl<W: Write> OmaOutput<W> {
         sample_rate: u32,
         channel_format: OmaChannelFormat,
         frame_size: u32,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, ContainerError> {
         let mut header = [0_u8; OMA_HEADER_SIZE];
         header[0..3].copy_from_slice(b"EA3");
         header[3] = 1;
@@ -134,14 +124,12 @@ impl<W: Write> OmaOutput<W> {
 }
 
 impl<W: Write> CompressedOutput for OmaOutput<W> {
-    fn write_frame(&mut self, data: &[u8]) -> io::Result<()> {
+    fn write_frame(&mut self, data: &[u8]) -> Result<(), ContainerError> {
         if data.len() < self.frame_size {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "short OMA frame",
-            ));
+            return Err(ContainerError::InvalidInput("short OMA frame"));
         }
-        self.inner.write_all(&data[..self.frame_size])
+        self.inner.write_all(&data[..self.frame_size])?;
+        Ok(())
     }
 
     fn name(&self) -> &str {

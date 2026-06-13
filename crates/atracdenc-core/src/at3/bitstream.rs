@@ -9,11 +9,11 @@ use crate::{
         scale::{ScaledBlock, quant_mantissas},
     },
     bitstream::{BitStream, make_sign},
-    container::CompressedOutput,
+    container::{CompressedOutput, ContainerError},
     dsp::gain::GainPoint,
     util::{div8_ceil, to_int},
 };
-use std::{io, sync::LazyLock};
+use std::sync::LazyLock;
 
 pub const FIXED_BIT_ALLOC_TABLE: [u32; MAX_BFUS] = [
     6, 6, 5, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 0, 0, 0,
@@ -112,7 +112,7 @@ impl Atrac3BitStreamWriter {
         &mut self,
         single_channel_elements: &[SingleChannelElement],
         loudness: f32,
-    ) -> io::Result<Vec<u8>> {
+    ) -> Vec<u8> {
         assert!(!single_channel_elements.is_empty());
         assert!(single_channel_elements.len() <= 2);
         assert!(!self.params.joint_stereo || single_channel_elements.len() == 2);
@@ -171,7 +171,7 @@ impl Atrac3BitStreamWriter {
                 loudness,
                 ..EncodeCtx::default()
             };
-            configure_and_encode_specs(&mut ctx, bitstream)?;
+            configure_and_encode_specs(&mut ctx, bitstream);
 
             let target_len = if self.params.joint_stereo && channel == 1 {
                 (half_frame_sz as i32 - ms_bytes_shift) as usize
@@ -193,7 +193,7 @@ impl Atrac3BitStreamWriter {
         }
 
         self.out_buffer.resize(self.params.frame_sz as usize, 0);
-        Ok(self.out_buffer.clone())
+        self.out_buffer.clone()
     }
 
     pub fn write_sound_unit(
@@ -201,8 +201,8 @@ impl Atrac3BitStreamWriter {
         output: &mut dyn CompressedOutput,
         single_channel_elements: &[SingleChannelElement],
         loudness: f32,
-    ) -> io::Result<()> {
-        let frame = self.build_sound_unit_frame(single_channel_elements, loudness)?;
+    ) -> Result<(), ContainerError> {
+        let frame = self.build_sound_unit_frame(single_channel_elements, loudness);
         output.write_frame(&frame)
     }
 }
@@ -300,7 +300,7 @@ fn encode_tonal_components(
     sce: &SingleChannelElement,
     alloc_table: &[u32],
     bitstream: &mut BitStream,
-) -> io::Result<u16> {
+) -> u16 {
     let groups = group_tonal_components(&sce.tonal_blocks, alloc_table);
     let tcsgn = groups
         .iter()
@@ -312,7 +312,7 @@ fn encode_tonal_components(
     let mut bits_used = 5_u16;
 
     if tcsgn == 0 {
-        return Ok(bits_used);
+        return bits_used;
     }
 
     bitstream.write(0, 2);
@@ -411,7 +411,7 @@ fn encode_tonal_components(
         }
     }
     assert_eq!(tcgn_check as usize, tcsgn);
-    Ok(bits_used)
+    bits_used
 }
 
 #[derive(Debug, Clone, Default)]
@@ -473,8 +473,8 @@ fn encode_specs(
     precision_per_block: &[u32],
     coding_mode: u8,
     mantissas: &[i32],
-) -> io::Result<()> {
-    encode_tonal_components(sce, precision_per_block, bitstream)?;
+) {
+    encode_tonal_components(sce, precision_per_block, bitstream);
     assert!(!precision_per_block.is_empty());
     assert!(precision_per_block.len() <= MAX_BFUS);
     assert!(
@@ -518,13 +518,12 @@ fn encode_specs(
             );
         }
     }
-    Ok(())
 }
 
 fn configure_and_encode_specs(
     ctx: &mut EncodeCtx<'_>,
     bitstream: &mut BitStream,
-) -> io::Result<()> {
+) {
     let sce = ctx.sce.expect("ATRAC3 encode context missing SCE");
 
     if sce.scaled_blocks.is_empty() {
@@ -533,13 +532,14 @@ fn configure_and_encode_specs(
         ctx.spread = 0.0;
         ctx.coding_mode = 1;
         ctx.precision_per_block = vec![0];
-        return encode_specs(
+        encode_specs(
             sce,
             bitstream,
             &ctx.precision_per_block,
             ctx.coding_mode,
             &ctx.mantissas,
         );
+        return;
     }
 
     ctx.spread = analyze_scale_factor_spread(&sce.scaled_blocks);
@@ -548,9 +548,9 @@ fn configure_and_encode_specs(
     ctx.alloc_init_done = true;
 
     let (mut best_precision, best_mode, best_mantissas) = match ctx.bfu_alloc_mode {
-        BfuAllocMode::Fast => search_best_allocation(ctx, sce)?,
+        BfuAllocMode::Fast => search_best_allocation(ctx, sce),
         BfuAllocMode::Parity => loop {
-            let result = search_best_allocation(ctx, sce)?;
+            let result = search_best_allocation(ctx, sce);
             if ctx.bfu_idx_const == 0 && result.0.len() > 1 {
                 let mut num_bfu = result.0.len() as u16;
                 if check_bfus(&mut num_bfu, &result.0) {
@@ -582,13 +582,13 @@ fn configure_and_encode_specs(
         &ctx.precision_per_block,
         ctx.coding_mode,
         &ctx.mantissas,
-    )
+    );
 }
 
 fn search_best_allocation(
     ctx: &mut EncodeCtx<'_>,
     sce: &SingleChannelElement,
-) -> io::Result<(Vec<u32>, u8, [i32; MAX_SPECS])> {
+) -> (Vec<u32>, u8, [i32; MAX_SPECS]) {
     let mut lo = -8.0_f32;
     let mut hi = 20.0_f32;
     let mut best_precision = vec![0; ctx.num_bfu as usize];
@@ -618,7 +618,7 @@ fn search_best_allocation(
                 sce,
                 &precision,
                 &mut BitStream::new(),
-            )?);
+            ));
 
         if total_bits <= ctx.target_bits as u32 {
             best_precision = precision;
@@ -648,7 +648,7 @@ fn search_best_allocation(
         best_mantissas = ctx.mantissas;
     }
 
-    Ok((best_precision, best_mode, best_mantissas))
+    (best_precision, best_mode, best_mantissas)
 }
 
 pub fn calc_specs_bits_consumption(
@@ -983,8 +983,7 @@ mod tests {
     fn empty_lp2_mono_sound_unit_duplicates_first_channel() {
         let mut writer = Atrac3BitStreamWriter::new(crate::at3::data::LP2, 0);
         let frame = writer
-            .build_sound_unit_frame(&[SingleChannelElement::new(4)], 1.0)
-            .unwrap();
+            .build_sound_unit_frame(&[SingleChannelElement::new(4)], 1.0);
         let half = crate::at3::data::LP2.frame_sz as usize / 2;
 
         assert_eq!(crate::at3::data::LP2.frame_sz as usize, frame.len());
@@ -999,8 +998,7 @@ mod tests {
             .build_sound_unit_frame(
                 &[SingleChannelElement::new(4), SingleChannelElement::new(4)],
                 1.0,
-            )
-            .unwrap();
+            );
 
         assert_eq!(crate::at3::data::LP4.frame_sz as usize, frame.len());
         assert_eq!(0xA3, frame[0]);
@@ -1017,7 +1015,7 @@ mod tests {
             energy: 1.0,
         });
 
-        let frame = writer.build_sound_unit_frame(&[sce], 1.0).unwrap();
+        let frame = writer.build_sound_unit_frame(&[sce], 1.0);
         assert_eq!(crate::at3::data::LP2.frame_sz as usize, frame.len());
     }
 
@@ -1032,7 +1030,7 @@ mod tests {
             energy: 1.0,
         });
 
-        let frame = writer.build_sound_unit_frame(&[sce], 1.0).unwrap();
+        let frame = writer.build_sound_unit_frame(&[sce], 1.0);
         assert_eq!(crate::at3::data::LP2.frame_sz as usize, frame.len());
     }
 
@@ -1050,7 +1048,7 @@ mod tests {
         let (mode, bits) =
             calc_specs_bits_consumption(&sce, &precision, &mut mantissas, &mut energy_err);
         let mut bs = BitStream::new();
-        encode_specs(&sce, &mut bs, &precision, mode, &mantissas).unwrap();
+        encode_specs(&sce, &mut bs, &precision, mode, &mantissas);
 
         assert_eq!(11 + bits as usize, bs.size_in_bits());
         assert!(energy_err[0].is_finite());
@@ -1073,7 +1071,7 @@ mod tests {
             },
         });
 
-        let frame = writer.build_sound_unit_frame(&[sce], 1.0).unwrap();
+        let frame = writer.build_sound_unit_frame(&[sce], 1.0);
         assert_eq!(crate::at3::data::LP2.frame_sz as usize, frame.len());
     }
 
@@ -1094,7 +1092,7 @@ mod tests {
         });
         let alloc = [2_u32];
         let mut bs = BitStream::new();
-        let bits = encode_tonal_components(&sce, &alloc, &mut bs).unwrap();
+        let bits = encode_tonal_components(&sce, &alloc, &mut bs);
         assert_eq!(bits as usize, bs.size_in_bits());
         assert!(bits > 5);
     }
@@ -1107,7 +1105,7 @@ mod tests {
         }
 
         impl CompressedOutput for Sink {
-            fn write_frame(&mut self, data: &[u8]) -> io::Result<()> {
+            fn write_frame(&mut self, data: &[u8]) -> Result<(), ContainerError> {
                 self.frames.push(data.to_vec());
                 Ok(())
             }

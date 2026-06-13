@@ -1,6 +1,6 @@
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 
-use super::CompressedOutput;
+use super::{CompressedOutput, ContainerError};
 
 const RMF_HEADER_SZ: usize = 18;
 const PROP_HEADER_SZ: usize = 50;
@@ -26,7 +26,7 @@ impl<W: Write + Seek> RmOutput<W> {
         num_frames: u32,
         frame_size: u32,
         joint_stereo: bool,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, ContainerError> {
         let frame_duration = 1000.0 * 1024.0 / 44_100.0;
         let bitrate = (8.0 * f64::from(frame_size) * 44_100.0 / 1024.0) as u32;
         write_rmf(&mut inner)?;
@@ -52,7 +52,7 @@ impl<W: Write + Seek> RmOutput<W> {
         })
     }
 
-    pub fn finalize(&mut self) -> io::Result<()> {
+    pub fn finalize(&mut self) -> Result<(), ContainerError> {
         let Some(inner) = &mut self.inner else {
             return Ok(());
         };
@@ -67,13 +67,13 @@ impl<W: Write + Seek> RmOutput<W> {
         Ok(())
     }
 
-    pub fn into_inner(mut self) -> io::Result<W> {
+    pub fn into_inner(mut self) -> Result<W, ContainerError> {
         self.finalize()?;
-        Ok(self.inner.take().expect("RM output inner already taken"))
+        self.inner.take().ok_or(ContainerError::AlreadyConsumed)
     }
 
-    fn write_audio_packet(&mut self, data: &[u8]) -> io::Result<()> {
-        let inner = self.inner.as_mut().expect("RM output inner already taken");
+    fn write_audio_packet(&mut self, data: &[u8]) -> Result<(), ContainerError> {
+        let inner = self.inner.as_mut().ok_or(ContainerError::AlreadyConsumed)?;
         match self.frame_num % 3 {
             0 => {
                 push_u16_to(inner, 0)?;
@@ -87,17 +87,15 @@ impl<W: Write + Seek> RmOutput<W> {
             }
             _ => {}
         }
-        inner.write_all(data)
+        inner.write_all(data)?;
+        Ok(())
     }
 }
 
 impl<W: Write + Seek> CompressedOutput for RmOutput<W> {
-    fn write_frame(&mut self, data: &[u8]) -> io::Result<()> {
+    fn write_frame(&mut self, data: &[u8]) -> Result<(), ContainerError> {
         if data.len() != self.frame_size as usize {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "unexpected RM frame size",
-            ));
+            return Err(ContainerError::InvalidInput("unexpected RM frame size"));
         }
         let scrambled = scramble_data(data);
         self.write_audio_packet(&scrambled)?;
@@ -120,12 +118,13 @@ impl<W: Write + Seek> Drop for RmOutput<W> {
     }
 }
 
-fn write_rmf<W: Write>(w: &mut W) -> io::Result<()> {
+fn write_rmf<W: Write>(w: &mut W) -> Result<(), ContainerError> {
     w.write_all(b".RMF")?;
     push_u32_to(w, RMF_HEADER_SZ as u32)?;
     push_u16_to(w, 0)?;
     push_u32_to(w, 0)?;
-    push_u32_to(w, 4)
+    push_u32_to(w, 4)?;
+    Ok(())
 }
 
 fn write_prop<W: Write>(
@@ -134,7 +133,7 @@ fn write_prop<W: Write>(
     num_frames: u32,
     bitrate: u32,
     frame_duration: f64,
-) -> io::Result<()> {
+) -> Result<(), ContainerError> {
     w.write_all(b"PROP")?;
     push_u32_to(w, PROP_HEADER_SZ as u32)?;
     push_u16_to(w, 0)?;
@@ -148,7 +147,8 @@ fn write_prop<W: Write>(
     push_u32_to(w, 0)?;
     push_u32_to(w, (RMF_HEADER_SZ + PROP_HEADER_SZ + MDPR_HEADER_SZ) as u32)?;
     push_u16_to(w, 1)?;
-    push_u16_to(w, 1 | 2)
+    push_u16_to(w, 1 | 2)?;
+    Ok(())
 }
 
 fn write_mdpr<W: Write>(
@@ -159,7 +159,7 @@ fn write_mdpr<W: Write>(
     joint_stereo: bool,
     bitrate: u32,
     frame_duration: f64,
-) -> io::Result<()> {
+) -> Result<(), ContainerError> {
     w.write_all(b"MDPR")?;
     push_u32_to(w, MDPR_HEADER_SZ as u32)?;
     push_u16_to(w, 0)?;
@@ -176,16 +176,18 @@ fn write_mdpr<W: Write>(
     w.write_all(&[RA_MIME.len() as u8])?;
     w.write_all(RA_MIME)?;
     let codec = codec_data(frame_size, num_channels, joint_stereo, bitrate);
-    w.write_all(&codec)
+    w.write_all(&codec)?;
+    Ok(())
 }
 
-fn write_data<W: Write>(w: &mut W, num_frames: u32) -> io::Result<()> {
+fn write_data<W: Write>(w: &mut W, num_frames: u32) -> Result<(), ContainerError> {
     debug_assert_eq!(DATA_HEADER_SZ, 18);
     w.write_all(b"DATA")?;
     push_u32_to(w, u32::MAX)?;
     push_u16_to(w, 0)?;
     push_u32_to(w, num_frames)?;
-    push_u32_to(w, 0)
+    push_u32_to(w, 0)?;
+    Ok(())
 }
 
 fn codec_data(
@@ -235,12 +237,14 @@ fn scramble_data(input: &[u8]) -> Vec<u8> {
     out
 }
 
-fn push_u16_to<W: Write>(w: &mut W, x: u16) -> io::Result<()> {
-    w.write_all(&x.to_be_bytes())
+fn push_u16_to<W: Write>(w: &mut W, x: u16) -> Result<(), ContainerError> {
+    w.write_all(&x.to_be_bytes())?;
+    Ok(())
 }
 
-fn push_u32_to<W: Write>(w: &mut W, x: u32) -> io::Result<()> {
-    w.write_all(&x.to_be_bytes())
+fn push_u32_to<W: Write>(w: &mut W, x: u32) -> Result<(), ContainerError> {
+    w.write_all(&x.to_be_bytes())?;
+    Ok(())
 }
 
 #[cfg(test)]

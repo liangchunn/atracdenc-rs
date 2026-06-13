@@ -6,14 +6,26 @@ pub mod oma;
 pub mod raw;
 pub mod rm;
 
+#[derive(Debug, thiserror::Error)]
+pub enum ContainerError {
+    #[error("invalid input: {0}")]
+    InvalidInput(&'static str),
+    #[error("I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("container already consumed")]
+    AlreadyConsumed,
+    #[error("unsupported sample rate")]
+    UnsupportedSampleRate,
+}
+
 pub trait CompressedOutput {
-    fn write_frame(&mut self, data: &[u8]) -> io::Result<()>;
+    fn write_frame(&mut self, data: &[u8]) -> Result<(), ContainerError>;
     fn name(&self) -> &str;
     fn channels(&self) -> usize;
 }
 
 pub trait CompressedInput {
-    fn read_frame(&mut self) -> io::Result<Option<Vec<u8>>>;
+    fn read_frame(&mut self) -> Result<Option<Vec<u8>>, ContainerError>;
     fn frame_size(&self) -> usize;
     fn length_in_samples(&self) -> u64;
     fn name(&self) -> &str;

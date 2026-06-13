@@ -46,13 +46,35 @@ impl BitStream {
         assert!(n <= 23, "bitstream reads are limited to 23 bits");
         assert!(self.read_pos + n <= self.buf.len() * 8, "read past buffer");
 
-        let mut out = 0_u32;
-        for _ in 0..n {
-            let byte_pos = self.read_pos / 8;
-            let bit_pos = 7 - (self.read_pos % 8);
-            out = (out << 1) | u32::from((self.buf[byte_pos] >> bit_pos) & 1);
-            self.read_pos += 1;
+        if n == 0 {
+            return 0;
         }
+
+        // Word-at-a-time MSB-first read. Equivalent to shifting in `n` bits one
+        // at a time, but consumes byte-aligned chunks to avoid a per-bit divmod.
+        let mut out = 0_u32;
+        let mut remaining = n;
+        let mut pos = self.read_pos;
+
+        while remaining > 0 {
+            let byte_pos = pos / 8;
+            let bit_off = pos % 8;
+            let avail = 8 - bit_off; // bits left in the current byte
+            let take = avail.min(remaining); // bits to consume this iteration
+
+            // Extract the `take` most-significant available bits of this byte,
+            // starting at `bit_off`, as a right-aligned value.
+            let byte = u32::from(self.buf[byte_pos]);
+            let shift = avail - take; // low bits within the byte to drop
+            let mask = (1_u32 << take) - 1;
+            let chunk = (byte >> shift) & mask;
+
+            out = (out << take) | chunk;
+            pos += take;
+            remaining -= take;
+        }
+
+        self.read_pos = pos;
         out
     }
 

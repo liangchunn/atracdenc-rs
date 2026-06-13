@@ -97,13 +97,21 @@ impl PcmWriter for WavWriter {
         }
 
         let total = size as usize * data.channels() as usize;
+        if total == 0 {
+            return Ok(());
+        }
+
+        // Batched write: hound's `get_i16_writer` buffers all samples and emits
+        // them with a single `write_all`, avoiding the per-sample dispatch and
+        // bookkeeping of `write_sample`. The clamp/encode math is unchanged so
+        // the output bytes stay bit-identical.
+        let mut writer = self.inner.get_i16_writer(total as u32);
         for sample in &data.samples()[..total] {
             let clipped = sample.clamp(-1.0, 32767.0 / 32768.0);
             let encoded = to_int(clipped * 32768.0).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-            self.inner
-                .write_sample(encoded)
-                .map_err(|_| PcmEngineError::WrongReadBuffer)?;
+            writer.write_sample(encoded);
         }
+        writer.flush().map_err(|_| PcmEngineError::WrongReadBuffer)?;
         Ok(())
     }
 }

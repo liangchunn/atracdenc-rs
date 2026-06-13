@@ -54,7 +54,7 @@ fn reference_midct(x: &[f32], n: usize) -> Vec<f32> {
 fn fill_random(dst: &mut [f32], seed: u32) {
     let mut rng = StdRng::seed_from_u64(seed as u64);
     for x in dst {
-        *x = rng.gen_range(-32768.0..32768.0);
+        *x = rng.random_range(-32768.0..32768.0);
     }
 }
 

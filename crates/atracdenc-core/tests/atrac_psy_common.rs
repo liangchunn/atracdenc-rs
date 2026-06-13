@@ -99,7 +99,7 @@ impl Noise {
     }
 
     fn next_uniform(&mut self) -> f32 {
-        self.rng.r#gen()
+        self.rng.random()
     }
 
     fn next_gaussian(&mut self) -> f32 {

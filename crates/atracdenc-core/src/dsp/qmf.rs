@@ -29,26 +29,64 @@ const TAP_HALF: [f32; 24] = [
     0.46424159,
 ];
 
-fn qmf_window() -> [f32; 48] {
-    let mut window = [0.0; 48];
-    for i in 0..24 {
+const QMF_WINDOW: [f32; 48] = {
+    let mut window = [0.0_f32; 48];
+    let mut i = 0;
+    while i < 24 {
         window[i] = TAP_HALF[i] * 2.0;
         window[47 - i] = TAP_HALF[i] * 2.0;
+        i += 1;
     }
     window
+};
+
+const QMF_WINDOW_EVEN: [f32; 24] = {
+    let mut arr = [0.0_f32; 24];
+    let mut i = 0;
+    while i < 24 {
+        arr[i] = QMF_WINDOW[2 * i];
+        i += 1;
+    }
+    arr
+};
+
+const QMF_WINDOW_ODD: [f32; 24] = {
+    let mut arr = [0.0_f32; 24];
+    let mut i = 0;
+    while i < 24 {
+        arr[i] = QMF_WINDOW[2 * i + 1];
+        i += 1;
+    }
+    arr
+};
+
+const HALF_HISTORY: usize = 23;
+
+#[inline]
+fn qmf_window() -> [f32; 48] {
+    QMF_WINDOW
 }
 
 pub struct Qmf<const N_IN: usize> {
-    pcm_buffer: Vec<f32>,
-    pcm_buffer_merge: Vec<f32>,
+    pcm_even: Vec<f32>,
+    pcm_odd: Vec<f32>,
+    pcm_sums: Vec<f32>,
+    pcm_diffs: Vec<f32>,
+}
+
+fn buffer_len(n_in: usize) -> usize {
+    n_in / 2 + HALF_HISTORY
 }
 
 impl<const N_IN: usize> Qmf<N_IN> {
     pub fn new() -> Self {
         assert!(N_IN >= 2 && N_IN % 4 == 0);
+        let len = buffer_len(N_IN);
         Self {
-            pcm_buffer: vec![0.0; N_IN + 46],
-            pcm_buffer_merge: vec![0.0; N_IN + 46],
+            pcm_even: vec![0.0; len],
+            pcm_odd: vec![0.0; len],
+            pcm_sums: vec![0.0; len],
+            pcm_diffs: vec![0.0; len],
         }
     }
 
@@ -57,21 +95,31 @@ impl<const N_IN: usize> Qmf<N_IN> {
         assert_eq!(N_IN / 2, lower.len());
         assert_eq!(N_IN / 2, upper.len());
 
-        let window = qmf_window();
-        self.pcm_buffer.copy_within(N_IN..N_IN + 46, 0);
-        self.pcm_buffer[46..46 + N_IN].copy_from_slice(input);
+        let half = N_IN / 2;
+        self.pcm_even.copy_within(half..half + HALF_HISTORY, 0);
+        self.pcm_odd.copy_within(half..half + HALF_HISTORY, 0);
+        for k in 0..half {
+            self.pcm_even[HALF_HISTORY + k] = input[2 * k];
+            self.pcm_odd[HALF_HISTORY + k] = input[2 * k + 1];
+        }
 
-        for j in (0..N_IN).step_by(2) {
-            let out_pos = j / 2;
-            lower[out_pos] = 0.0;
-            upper[out_pos] = 0.0;
+        let we = QMF_WINDOW_EVEN.as_ptr();
+        let wo = QMF_WINDOW_ODD.as_ptr();
+        let pe = self.pcm_even.as_ptr();
+        let po = self.pcm_odd.as_ptr();
+        for out_pos in 0..half {
+            let mut lo = 0.0_f32;
+            let mut hi = 0.0_f32;
+            let off = out_pos;
             for i in 0..24 {
-                lower[out_pos] += window[2 * i] * self.pcm_buffer[47 + j - (2 * i)];
-                upper[out_pos] += window[2 * i + 1] * self.pcm_buffer[47 + j - (2 * i) - 1];
+                unsafe {
+                    lo += *wo.add(i) * *po.add(off + i);
+                    hi += *we.add(i) * *pe.add(off + i);
+                }
             }
-            let temp = upper[out_pos];
-            upper[out_pos] = lower[out_pos] - upper[out_pos];
-            lower[out_pos] += temp;
+            let temp = hi;
+            upper[out_pos] = lo - hi;
+            lower[out_pos] = lo + temp;
         }
     }
 
@@ -80,28 +128,32 @@ impl<const N_IN: usize> Qmf<N_IN> {
         assert_eq!(N_IN / 2, lower.len());
         assert_eq!(N_IN / 2, upper.len());
 
-        let window = qmf_window();
-        let new_part = &mut self.pcm_buffer_merge[46..];
-        for i in (0..N_IN).step_by(4) {
-            new_part[i] = lower[i / 2] + upper[i / 2];
-            new_part[i + 1] = lower[i / 2] - upper[i / 2];
-            new_part[i + 2] = lower[i / 2 + 1] + upper[i / 2 + 1];
-            new_part[i + 3] = lower[i / 2 + 1] - upper[i / 2 + 1];
+        let half = N_IN / 2;
+        for j in 0..half {
+            self.pcm_sums[HALF_HISTORY + j] = lower[j] + upper[j];
+            self.pcm_diffs[HALF_HISTORY + j] = lower[j] - upper[j];
         }
 
-        for j in 0..(N_IN / 2) {
-            let win = &self.pcm_buffer_merge[j * 2..];
-            let mut s1 = 0.0;
-            let mut s2 = 0.0;
-            for i in (0..48).step_by(2) {
-                s1 += win[i] * window[i];
-                s2 += win[i + 1] * window[i + 1];
+        let we = QMF_WINDOW_EVEN.as_ptr();
+        let wo = QMF_WINDOW_ODD.as_ptr();
+        let sums = self.pcm_sums.as_ptr();
+        let diffs = self.pcm_diffs.as_ptr();
+        for j in 0..half {
+            let mut s1 = 0.0_f32;
+            let mut s2 = 0.0_f32;
+            let off = j;
+            for i in 0..24 {
+                unsafe {
+                    s1 += *we.add(i) * *sums.add(off + i);
+                    s2 += *wo.add(i) * *diffs.add(off + i);
+                }
             }
             out[j * 2] = s2;
             out[j * 2 + 1] = s1;
         }
 
-        self.pcm_buffer_merge.copy_within(N_IN..N_IN + 46, 0);
+        self.pcm_sums.copy_within(half..half + HALF_HISTORY, 0);
+        self.pcm_diffs.copy_within(half..half + HALF_HISTORY, 0);
     }
 }
 

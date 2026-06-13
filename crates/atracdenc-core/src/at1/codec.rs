@@ -162,6 +162,8 @@ pub struct Atrac1Decoder {
     pcm_mid: Vec<Vec<f32>>,
     pcm_hi: Vec<Vec<f32>>,
     synthesis_filter_bank: Vec<Atrac1SynthesisFilterBank>,
+    specs_buf: Vec<Vec<f32>>,
+    sum_buf: Vec<Vec<f32>>,
     pcm_value_max: f32,
     pcm_value_min: f32,
 }
@@ -178,6 +180,8 @@ impl Atrac1Decoder {
             synthesis_filter_bank: (0..channels)
                 .map(|_| Atrac1SynthesisFilterBank::new())
                 .collect(),
+            specs_buf: vec![vec![0.0; NUM_SAMPLES]; channels],
+            sum_buf: vec![vec![0.0; NUM_SAMPLES]; channels],
             pcm_value_max: 1.0,
             pcm_value_min: -1.0,
         }
@@ -209,19 +213,20 @@ impl Processor for Atrac1Decoder {
             };
             let mut bitstream = BitStream::from_bytes(&frame);
             let mode = BlockSizeMod::parse(&mut bitstream);
-            let mut specs = vec![0.0; NUM_SAMPLES];
-            Atrac1Dequantiser::new().dequant(&mut bitstream, &mode, &mut specs);
+            let specs = &mut self.specs_buf[channel];
+            specs.fill(0.0);
+            Atrac1Dequantiser::new().dequant(&mut bitstream, &mode, specs);
             self.mdct.imdct(
-                &mut specs,
+                specs,
                 &mode,
                 &mut self.pcm_low[channel],
                 &mut self.pcm_mid[channel],
                 &mut self.pcm_hi[channel],
             );
 
-            let mut sum = vec![0.0; NUM_SAMPLES];
+            let sum = &mut self.sum_buf[channel];
             self.synthesis_filter_bank[channel].synthesis(
-                &mut sum,
+                sum,
                 &self.pcm_low[channel][..128],
                 &self.pcm_mid[channel][..128],
                 &self.pcm_hi[channel][..256],

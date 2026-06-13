@@ -8,11 +8,6 @@ edition = "2024"
 license = "LGPL-2.1-or-later"
 repository = ""
 
-[workspace.dependencies]
-rustfft = "6.4.1"
-hound = "3.5.1"
-clap = { version = "4.5.40", features = ["derive"] }
-
 # Optimized build with full debug symbols, for sampling profilers (samply).
 [profile.profiling]
 inherits = "release"

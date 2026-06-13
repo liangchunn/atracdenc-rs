@@ -6,8 +6,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-hound = { workspace = true }
-rustfft = { workspace = true }
+hound = "3.5.1"
+rustfft = "6.4.1"
 thiserror = "2.0.18"
 
 [dev-dependencies]

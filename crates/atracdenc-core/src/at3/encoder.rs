@@ -129,12 +129,15 @@ impl Atrac3Encoder {
         let (left_channels, right_channels) = self.pcm_bands.split_at_mut(1);
         let left = &mut left_channels[0];
         let right = &mut right_channels[0];
+        let mut l_subs: [[f32; 256]; 4] =
+            std::array::from_fn(|band| std::array::from_fn(|sample| left[band][256 + sample]));
+        let mut r_subs: [[f32; 256]; 4] =
+            std::array::from_fn(|band| std::array::from_fn(|sample| right[band][256 + sample]));
+        matrixing(&mut l_subs, &mut r_subs);
         for band in 0..NUM_QMF {
-            for sample in 256..512 {
-                let l = left[band][sample];
-                let r = right[band][sample];
-                left[band][sample] = (l + r) * 0.5;
-                right[band][sample] = (l - r) * 0.5;
+            for sample in 0..256 {
+                left[band][256 + sample] = l_subs[band][sample];
+                right[band][256 + sample] = r_subs[band][sample];
             }
         }
     }
@@ -149,16 +152,7 @@ impl Atrac3Encoder {
 
         if self.settings.container_params.joint_stereo && channels == 2 {
             let (left_channels, right_channels) = gain_input.split_at_mut(1);
-            let left = &mut left_channels[0];
-            let right = &mut right_channels[0];
-            for band in 0..NUM_QMF {
-                for sample in 0..512 {
-                    let l = left[band][sample];
-                    let r = right[band][sample];
-                    left[band][sample] = (l + r) * 0.5;
-                    right[band][sample] = (l - r) * 0.5;
-                }
-            }
+            matrixing(&mut left_channels[0], &mut right_channels[0]);
         }
 
         gain_input
@@ -368,7 +362,11 @@ impl Atrac3Encoder {
 }
 
 impl Processor for Atrac3Encoder {
-    fn process_frame(&mut self, data: &mut [f32], meta: &ProcessMeta) -> ProcessResult {
+    fn process_frame(
+        &mut self,
+        data: &mut [f32],
+        meta: &ProcessMeta,
+    ) -> std::io::Result<ProcessResult> {
         let channels = usize::from(meta.channels).clamp(1, self.channels());
         assert!(channels <= 2);
         assert!(data.len() >= NUM_SAMPLES * channels);
@@ -380,7 +378,7 @@ impl Processor for Atrac3Encoder {
 
         if self.lookahead_pending {
             self.lookahead_pending = false;
-            return ProcessResult::LookAhead;
+            return Ok(ProcessResult::LookAhead);
         }
 
         if let Some(log) = self.yaml_log.as_deref_mut() {
@@ -486,17 +484,15 @@ impl Processor for Atrac3Encoder {
                 .push(SingleChannelElement::new(1));
         }
 
-        self.bitstream
-            .write_sound_unit(
-                self.output.as_mut(),
-                &self.single_channel_elements,
-                self.loudness / LOUD_FACTOR,
-            )
-            .expect("failed to write ATRAC3 frame");
+        self.bitstream.write_sound_unit(
+            self.output.as_mut(),
+            &self.single_channel_elements,
+            self.loudness / LOUD_FACTOR,
+        )?;
 
         self.shift_lookahead(channels);
         self.frame_num += 1;
-        ProcessResult::Processed
+        Ok(ProcessResult::Processed)
     }
 }
 
@@ -667,7 +663,7 @@ pub fn extract_tonal_components(specs: &mut [f32], flatness_per_bfu: &[f32]) -> 
         }
 
         let max_len = (MAX_TONAL_LEN as usize).min(block_len);
-        let mut best_score = -1.0_f32;
+        let mut best_score: Option<f32> = None;
         let mut best_start = spec_num_start;
         let mut best_len = 1_usize;
 
@@ -676,14 +672,17 @@ pub fn extract_tonal_components(specs: &mut [f32], flatness_per_bfu: &[f32]) -> 
             let mut score = 0.0;
             for len in 1..=max_len_for_start {
                 score += specs[start + len - 1].abs();
-                if score > best_score {
-                    best_score = score;
+                if best_score.is_none_or(|bs| score > bs) {
+                    best_score = Some(score);
                     best_start = start;
                     best_len = len;
                 }
             }
         }
 
+        let Some(best_score) = best_score else {
+            continue;
+        };
         if best_score <= 0.0 {
             continue;
         }
@@ -735,9 +734,9 @@ pub fn map_tonal_components(
     }
 }
 
-pub fn matrixing(left: &mut [[f32; 256]; 4], right: &mut [[f32; 256]; 4]) {
+pub fn matrixing<const N: usize>(left: &mut [[f32; N]; 4], right: &mut [[f32; N]; 4]) {
     for subband in 0..4 {
-        for sample in 0..256 {
+        for sample in 0..N {
             let l = left[subband][sample];
             let r = right[subband][sample];
             left[subband][sample] = (l + r) * 0.5;
@@ -923,12 +922,16 @@ mod tests {
 
         assert_eq!(
             ProcessResult::LookAhead,
-            encoder.process_frame(&mut pcm0, &ProcessMeta { channels: 1 })
+            encoder
+                .process_frame(&mut pcm0, &ProcessMeta { channels: 1 })
+                .unwrap()
         );
         assert_eq!(0, frames.borrow().len());
         assert_eq!(
             ProcessResult::Processed,
-            encoder.process_frame(&mut pcm1, &ProcessMeta { channels: 1 })
+            encoder
+                .process_frame(&mut pcm1, &ProcessMeta { channels: 1 })
+                .unwrap()
         );
 
         let frames = frames.borrow();
@@ -961,11 +964,15 @@ mod tests {
 
         assert_eq!(
             ProcessResult::LookAhead,
-            encoder.process_frame(&mut pcm0, &ProcessMeta { channels: 1 })
+            encoder
+                .process_frame(&mut pcm0, &ProcessMeta { channels: 1 })
+                .unwrap()
         );
         assert_eq!(
             ProcessResult::Processed,
-            encoder.process_frame(&mut pcm1, &ProcessMeta { channels: 1 })
+            encoder
+                .process_frame(&mut pcm1, &ProcessMeta { channels: 1 })
+                .unwrap()
         );
 
         let frames = frames.borrow();
@@ -1000,11 +1007,15 @@ mod tests {
 
         assert_eq!(
             ProcessResult::LookAhead,
-            encoder.process_frame(&mut pcm0, &ProcessMeta { channels: 1 })
+            encoder
+                .process_frame(&mut pcm0, &ProcessMeta { channels: 1 })
+                .unwrap()
         );
         assert_eq!(
             ProcessResult::Processed,
-            encoder.process_frame(&mut pcm1, &ProcessMeta { channels: 1 })
+            encoder
+                .process_frame(&mut pcm1, &ProcessMeta { channels: 1 })
+                .unwrap()
         );
 
         let text = String::from_utf8(log_data.borrow().clone()).unwrap();

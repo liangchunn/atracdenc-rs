@@ -50,7 +50,7 @@ struct EncodeCommand {
     opts: CliOptions,
 }
 
-#[derive(Debug, Args, Clone)]
+#[derive(Debug, Args)]
 struct CliOptions {
     #[arg(short = 'e', long = "encode", value_enum)]
     encode: Option<Codec>,
@@ -66,13 +66,15 @@ struct CliOptions {
     bitrate: Option<u32>,
     #[arg(long = "bfuidxconst", alias = "bfu-idx-const", default_value_t = 0)]
     bfu_idx_const: u32,
-    #[arg(long = "bfuidxfast")]
+    #[arg(long = "bfuidxfast", hide = true)]
+    /// not implemented
     bfu_idx_fast: bool,
     #[arg(long = "at3-bfu-mode", value_enum, default_value = "fast")]
     at3_bfu_mode: At3BfuMode,
     #[arg(long = "notransient", num_args = 0..=1, require_equals = true, default_missing_value = "0")]
     no_transient: Option<u32>,
-    #[arg(long = "nostdout")]
+    #[arg(long = "nostdout", hide = true)]
+    /// not implemented
     no_stdout: bool,
     #[arg(long = "notonal", alias = "no-tonal-components")]
     no_tonal_components: bool,
@@ -80,7 +82,8 @@ struct CliOptions {
     no_gain_control: bool,
     #[arg(long = "yaml-log")]
     yaml_log: Option<PathBuf>,
-    #[arg(short = 'm')]
+    #[arg(short = 'm', hide = true)]
+    /// not implemented
     mono: bool,
 }
 
@@ -141,8 +144,12 @@ fn encode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
         .as_ref()
         .ok_or_else(|| invalid_input("missing output file"))?;
 
-    let reader = WavReader::open(input)
-        .map_err(|_| invalid_input(format!("unable to open input file {}", input.display())))?;
+    let reader = WavReader::open(input).map_err(|e| {
+        invalid_input(format!(
+            "unable to open input file {}: {e}",
+            input.display()
+        ))
+    })?;
     let channels = usize::from(reader.channels());
     let sample_rate = reader.sample_rate();
 
@@ -166,18 +173,13 @@ fn encode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
     }
 
     let mut processor = build_encoder(&opts, codec, container, channels, sample_rate, frame_count)?;
-    let mut engine = PcmEngine::new(
-        frame_samples(codec) as u16,
-        channels,
-        Some(Box::new(reader)),
-        None,
-    );
+    let mut engine = PcmEngine::new(frame_samples(codec), channels, Some(Box::new(reader)), None);
 
     loop {
         match engine.apply_process(frame_samples(codec), processor.as_mut()) {
             Ok(_) => {}
             Err(PcmEngineError::NoDataToRead) => break,
-            Err(err) => return Err(invalid_input(format!("PCM processing failed: {err:?}")).into()),
+            Err(err) => return Err(invalid_input(format!("PCM processing failed: {err}")).into()),
         }
     }
 
@@ -207,9 +209,9 @@ fn decode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
         .output
         .as_ref()
         .ok_or_else(|| invalid_input("missing output file"))?;
-    let input_file = File::open(input_path).map_err(|_| {
+    let input_file = File::open(input_path).map_err(|e| {
         invalid_input(format!(
-            "unable to open input file {}",
+            "unable to open input file {}: {e}",
             input_path.display()
         ))
     })?;
@@ -225,7 +227,7 @@ fn decode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
     let total_samples = input.length_in_samples();
     let writer = WavWriter::create(output_path, channels as u16, 44_100)?;
     let mut engine = PcmEngine::new(
-        DECODE_BUFFER_SAMPLES as u16,
+        DECODE_BUFFER_SAMPLES,
         channels,
         None,
         Some(Box::new(writer)),
@@ -236,7 +238,7 @@ fn decode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
     while total_samples > processed {
         match engine.apply_process(atracdenc_core::at1::data::NUM_SAMPLES, &mut decoder) {
             Ok(p) => processed = p,
-            Err(err) => return Err(invalid_input(format!("PCM processing failed: {err:?}")).into()),
+            Err(err) => return Err(invalid_input(format!("PCM processing failed: {err}")).into()),
         }
     }
 

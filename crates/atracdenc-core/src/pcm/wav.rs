@@ -41,7 +41,7 @@ impl WavReader {
 impl PcmReader for WavReader {
     fn read(&mut self, data: &mut PcmBuffer, size: u32) -> Result<bool, PcmEngineError> {
         if data.channels() != self.spec.channels {
-            return Err(PcmEngineError::WrongReadBuffer);
+            return Err(PcmEngineError::ChannelMismatch);
         }
 
         let total = size as usize * self.spec.channels as usize;
@@ -52,7 +52,9 @@ impl PcmReader for WavReader {
                     *dst = f32::from(sample) / 32768.0;
                     read += 1;
                 }
-                Some(Err(_)) => return Err(PcmEngineError::WrongReadBuffer),
+                Some(Err(e)) => {
+                    return Err(PcmEngineError::Io(std::io::Error::other(e.to_string())));
+                }
                 None => break,
             }
         }
@@ -93,7 +95,7 @@ impl WavWriter {
 impl PcmWriter for WavWriter {
     fn write(&mut self, data: &PcmBuffer, size: u32) -> Result<(), PcmEngineError> {
         if data.channels() != self.channels {
-            return Err(PcmEngineError::WrongReadBuffer);
+            return Err(PcmEngineError::ChannelMismatch);
         }
 
         let total = size as usize * data.channels() as usize;
@@ -101,19 +103,19 @@ impl PcmWriter for WavWriter {
             return Ok(());
         }
 
-        // Batched write: hound's `get_i16_writer` buffers all samples and emits
-        // them with a single `write_all`, avoiding the per-sample dispatch and
-        // bookkeeping of `write_sample`. The clamp/encode math is unchanged so
-        // the output bytes stay bit-identical.
+        let scale_max = 32767.0 / 32768.0;
+        let scale_factor = 32768.0;
+
         let mut writer = self.inner.get_i16_writer(total as u32);
         for sample in &data.samples()[..total] {
-            let clipped = sample.clamp(-1.0, 32767.0 / 32768.0);
-            let encoded = to_int(clipped * 32768.0).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            let clipped = sample.clamp(-1.0, scale_max);
+            let encoded =
+                to_int(clipped * scale_factor).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
             writer.write_sample(encoded);
         }
         writer
             .flush()
-            .map_err(|_| PcmEngineError::WrongReadBuffer)?;
+            .map_err(|e| PcmEngineError::Io(std::io::Error::other(e.to_string())))?;
         Ok(())
     }
 }

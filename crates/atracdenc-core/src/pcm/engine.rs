@@ -1,14 +1,72 @@
+use std::fmt;
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ProcessResult {
     LookAhead,
     Processed,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum PcmEngineError {
+    ChannelMismatch,
     NoDataToRead,
-    BufferTooSmall,
-    WrongReadBuffer,
+    DataNotReady,
+    Io(std::io::Error),
+    InternalState,
+}
+
+impl Clone for PcmEngineError {
+    fn clone(&self) -> Self {
+        match self {
+            Self::ChannelMismatch => Self::ChannelMismatch,
+            Self::NoDataToRead => Self::NoDataToRead,
+            Self::DataNotReady => Self::DataNotReady,
+            Self::Io(e) => Self::Io(std::io::Error::new(e.kind(), e.to_string())),
+            Self::InternalState => Self::InternalState,
+        }
+    }
+}
+
+impl PartialEq for PcmEngineError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::ChannelMismatch, Self::ChannelMismatch)
+            | (Self::NoDataToRead, Self::NoDataToRead)
+            | (Self::DataNotReady, Self::DataNotReady)
+            | (Self::InternalState, Self::InternalState) => true,
+            (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for PcmEngineError {}
+
+impl fmt::Display for PcmEngineError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ChannelMismatch => write!(f, "channel mismatch"),
+            Self::NoDataToRead => write!(f, "no data to read"),
+            Self::DataNotReady => write!(f, "data not ready"),
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::InternalState => write!(f, "internal state error"),
+        }
+    }
+}
+
+impl std::error::Error for PcmEngineError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for PcmEngineError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -18,9 +76,9 @@ pub struct PcmBuffer {
 }
 
 impl PcmBuffer {
-    pub fn new(buf_size: u16, num_channels: usize) -> Self {
+    pub fn new(buf_size: usize, num_channels: usize) -> Self {
         Self {
-            buf: vec![0.0; buf_size as usize * num_channels],
+            buf: vec![0.0; buf_size * num_channels],
             num_channels,
         }
     }
@@ -78,7 +136,11 @@ pub struct ProcessMeta {
 }
 
 pub trait Processor {
-    fn process_frame(&mut self, data: &mut [f32], meta: &ProcessMeta) -> ProcessResult;
+    fn process_frame(
+        &mut self,
+        data: &mut [f32],
+        meta: &ProcessMeta,
+    ) -> std::io::Result<ProcessResult>;
 }
 
 pub struct PcmEngine {
@@ -91,7 +153,7 @@ pub struct PcmEngine {
 
 impl PcmEngine {
     pub fn new(
-        buf_size: u16,
+        buf_size: usize,
         num_channels: usize,
         reader: Option<Box<dyn PcmReader>>,
         writer: Option<Box<dyn PcmWriter>>,
@@ -110,8 +172,11 @@ impl PcmEngine {
         step: usize,
         processor: &mut dyn Processor,
     ) -> Result<u64, PcmEngineError> {
+        if step == 0 {
+            return Err(PcmEngineError::InternalState);
+        }
         if step > self.buffer.size() {
-            return Err(PcmEngineError::BufferTooSmall);
+            return Err(PcmEngineError::InternalState);
         }
 
         let mut drain = false;
@@ -133,7 +198,7 @@ impl PcmEngine {
         };
 
         for i in (0..=self.buffer.size() - step).step_by(step) {
-            let res = processor.process_frame(self.buffer.frames_mut(i, step), &meta);
+            let res = processor.process_frame(self.buffer.frames_mut(i, step), &meta)?;
             if res == ProcessResult::Processed {
                 last_pos += step;
                 if drain && self.to_drain != 0 {
@@ -141,7 +206,9 @@ impl PcmEngine {
                     break;
                 }
             } else {
-                assert!(!drain);
+                if drain {
+                    return Err(PcmEngineError::InternalState);
+                }
                 self.to_drain += 1;
             }
         }
@@ -167,7 +234,7 @@ mod tests {
     impl PcmReader for VecReader {
         fn read(&mut self, data: &mut PcmBuffer, size: u32) -> Result<bool, PcmEngineError> {
             if data.channels() as usize != self.channels {
-                return Err(PcmEngineError::WrongReadBuffer);
+                return Err(PcmEngineError::ChannelMismatch);
             }
             let Some(chunk) = self.chunks.first().cloned() else {
                 return Ok(false);
@@ -200,13 +267,17 @@ mod tests {
     }
 
     impl Processor for LookaheadOnce {
-        fn process_frame(&mut self, data: &mut [f32], _meta: &ProcessMeta) -> ProcessResult {
+        fn process_frame(
+            &mut self,
+            data: &mut [f32],
+            _meta: &ProcessMeta,
+        ) -> std::io::Result<ProcessResult> {
             self.calls += 1;
             data[0] += 1.0;
             if self.calls == 1 {
-                ProcessResult::LookAhead
+                Ok(ProcessResult::LookAhead)
             } else {
-                ProcessResult::Processed
+                Ok(ProcessResult::Processed)
             }
         }
     }

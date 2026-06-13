@@ -74,7 +74,11 @@ impl Atrac1Encoder {
 }
 
 impl Processor for Atrac1Encoder {
-    fn process_frame(&mut self, data: &mut [f32], _meta: &ProcessMeta) -> ProcessResult {
+    fn process_frame(
+        &mut self,
+        data: &mut [f32],
+        _meta: &ProcessMeta,
+    ) -> std::io::Result<ProcessResult> {
         let channels = self.channels();
         assert!(data.len() >= NUM_SAMPLES * channels);
         let mut window_masks = vec![0_u32; channels];
@@ -146,12 +150,10 @@ impl Processor for Atrac1Encoder {
                 &block_sizes[channel],
                 self.loudness / LOUD_FACTOR,
             );
-            self.output
-                .write_frame(&frame)
-                .expect("failed to write ATRAC1 frame");
+            self.output.write_frame(&frame)?;
         }
 
-        ProcessResult::Processed
+        Ok(ProcessResult::Processed)
     }
 }
 
@@ -193,16 +195,16 @@ impl Atrac1Decoder {
 }
 
 impl Processor for Atrac1Decoder {
-    fn process_frame(&mut self, data: &mut [f32], _meta: &ProcessMeta) -> ProcessResult {
+    fn process_frame(
+        &mut self,
+        data: &mut [f32],
+        _meta: &ProcessMeta,
+    ) -> std::io::Result<ProcessResult> {
         let channels = self.channels();
         assert!(data.len() >= NUM_SAMPLES * channels);
 
         for channel in 0..channels {
-            let frame = match self
-                .input
-                .read_frame()
-                .expect("failed to read ATRAC1 frame")
-            {
+            let frame = match self.input.read_frame()? {
                 Some(frame) => frame,
                 None => {
                     // The original atracdenc decode loop processes whole engine
@@ -242,7 +244,7 @@ impl Processor for Atrac1Decoder {
             }
         }
 
-        ProcessResult::Processed
+        Ok(ProcessResult::Processed)
     }
 }
 
@@ -375,7 +377,9 @@ mod tests {
 
         assert_eq!(
             ProcessResult::Processed,
-            encoder.process_frame(&mut pcm, &ProcessMeta { channels: 1 })
+            encoder
+                .process_frame(&mut pcm, &ProcessMeta { channels: 1 })
+                .unwrap()
         );
         let frames = frames.borrow();
         assert_eq!(1, frames.len());
@@ -402,7 +406,9 @@ mod tests {
         for (i, sample) in pcm.iter_mut().enumerate() {
             *sample = (2.0 * std::f32::consts::PI * 880.0 * i as f32 / 44_100.0).sin() * 0.05;
         }
-        encoder.process_frame(&mut pcm, &ProcessMeta { channels: 1 });
+        encoder
+            .process_frame(&mut pcm, &ProcessMeta { channels: 1 })
+            .unwrap();
 
         let input = MemoryInput {
             frames: frames.borrow().clone(),
@@ -413,7 +419,9 @@ mod tests {
         let mut decoded = vec![0.0; NUM_SAMPLES];
         assert_eq!(
             ProcessResult::Processed,
-            decoder.process_frame(&mut decoded, &ProcessMeta { channels: 1 })
+            decoder
+                .process_frame(&mut decoded, &ProcessMeta { channels: 1 })
+                .unwrap()
         );
         assert!(decoded.iter().all(|x| x.is_finite()));
     }
@@ -442,8 +450,7 @@ mod tests {
             pos: 0,
             channels,
         };
-        let mut encode_engine =
-            PcmEngine::new(NUM_SAMPLES as u16, channels, Some(Box::new(reader)), None);
+        let mut encode_engine = PcmEngine::new(NUM_SAMPLES, channels, Some(Box::new(reader)), None);
         let mut encoder = Atrac1Encoder::new(Box::new(shared), EncodeSettings::default());
 
         while encode_engine
@@ -461,8 +468,7 @@ mod tests {
             pos: 0,
             channels,
         };
-        let mut decode_engine =
-            PcmEngine::new(NUM_SAMPLES as u16, channels, None, Some(Box::new(writer)));
+        let mut decode_engine = PcmEngine::new(NUM_SAMPLES, channels, None, Some(Box::new(writer)));
         let mut decoder = Atrac1Decoder::new(Box::new(input));
 
         for _ in 0..encoded_frames.borrow().len() {
@@ -501,7 +507,9 @@ mod tests {
                     *sample =
                         (2.0 * std::f32::consts::PI * 330.0 * n as f32 / 44_100.0).sin() * 0.04;
                 }
-                encoder.process_frame(&mut pcm, &ProcessMeta { channels: 1 });
+                encoder
+                    .process_frame(&mut pcm, &ProcessMeta { channels: 1 })
+                    .unwrap();
             }
         }
 

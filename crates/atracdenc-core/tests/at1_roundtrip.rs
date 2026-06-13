@@ -38,7 +38,9 @@ fn encode_aea_mono(pcm: &[f32]) -> Vec<u8> {
             let mut frame = chunk.to_vec();
             assert_eq!(
                 ProcessResult::Processed,
-                encoder.process_frame(&mut frame, &ProcessMeta { channels: 1 })
+                encoder
+                    .process_frame(&mut frame, &ProcessMeta { channels: 1 })
+                    .unwrap()
             );
         }
     }
@@ -61,7 +63,9 @@ fn decode_aea_mono(bytes: Vec<u8>) -> Vec<f32> {
         let mut frame = vec![0.0; NUM_SAMPLES];
         assert_eq!(
             ProcessResult::Processed,
-            decoder.process_frame(&mut frame, &ProcessMeta { channels: 1 })
+            decoder
+                .process_frame(&mut frame, &ProcessMeta { channels: 1 })
+                .unwrap()
         );
         decoded.extend(frame);
     }

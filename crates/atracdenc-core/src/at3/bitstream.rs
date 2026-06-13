@@ -621,7 +621,7 @@ fn search_best_allocation(
             )?);
 
         if total_bits <= ctx.target_bits as u32 {
-            best_precision = precision.clone();
+            best_precision = precision;
             best_mode = mode;
             best_mantissas = ctx.mantissas;
             best_bits = total_bits;

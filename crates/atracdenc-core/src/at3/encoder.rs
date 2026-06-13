@@ -573,7 +573,6 @@ fn add_point_zero_guarded(
     cur_target: f32,
     curve_points: &mut Vec<GainCurvePoint>,
 ) {
-    let curve_before = curve_points.clone();
     let mut hpf_rms_next_mod = 0.0;
     let mut hpf_rms_next_mod_valid = false;
 
@@ -616,6 +615,7 @@ fn add_point_zero_guarded(
         return;
     }
 
+    let curve_before = curve_points.clone();
     let score_before = calc_curve_early_mismatch_score(gain, cur_target, &curve_before);
     let score_after = calc_curve_early_mismatch_score(gain, cur_target, curve_points);
     const POINT0_WORSE_TOL: f32 = 0.02;

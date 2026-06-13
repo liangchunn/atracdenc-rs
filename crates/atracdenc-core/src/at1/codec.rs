@@ -198,7 +198,11 @@ impl Processor for Atrac1Decoder {
         assert!(data.len() >= NUM_SAMPLES * channels);
 
         for channel in 0..channels {
-            let frame = match self.input.read_frame().expect("failed to read ATRAC1 frame") {
+            let frame = match self
+                .input
+                .read_frame()
+                .expect("failed to read ATRAC1 frame")
+            {
                 Some(frame) => frame,
                 None => {
                     // The original atracdenc decode loop processes whole engine

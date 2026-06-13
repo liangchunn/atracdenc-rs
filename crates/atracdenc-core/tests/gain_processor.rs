@@ -1244,8 +1244,8 @@ fn make_burst_signal(total_samples: usize, event_dist: i32) -> Vec<f32> {
 
     let mut signal = vec![0.0_f32; total_samples];
     for s in 0..total_samples {
-        signal[s] = BASE_AMP
-            * (2.0 * std::f32::consts::PI * CARRIER_HZ * s as f32 / SAMPLE_RATE).sin();
+        signal[s] =
+            BASE_AMP * (2.0 * std::f32::consts::PI * CARRIER_HZ * s as f32 / SAMPLE_RATE).sin();
     }
 
     let mut lcg: u32 = 0xdead_beef;
@@ -1370,8 +1370,7 @@ fn boundary_level_mismatch_issue1_mdct_roundtrip_no_gain() {
     let mut max_err = 0.0_f32;
     for frame in skip_frames..=NUM_FRAMES - 2 {
         for s in 0..FRAME_SZ {
-            let err =
-                (reconstructed[frame * FRAME_SZ + s] - signal[frame * FRAME_SZ + s]).abs();
+            let err = (reconstructed[frame * FRAME_SZ + s] - signal[frame * FRAME_SZ + s]).abs();
             if err > max_err {
                 max_err = err;
             }
@@ -1431,10 +1430,8 @@ fn run_gain_roundtrip(total_samples: usize, event_dist: i32, quant_step: Option<
         let result = upsampler.process(&look_ahead);
         if result.high_freq_ratio >= SpectralUpsampler::HIGH_FREQ_THRESHOLD {
             let gain = analyze_gain(&result.signal[1024..1024 + 2048], 32, true, None, None);
-            let next_level =
-                analyze_gain(&result.signal[3072..3072 + 64], 1, true, None, None)[0];
-            let curve_points =
-                calc_curve(&gain, &mut ctx, Some(next_level), 2.0, None, None, None);
+            let next_level = analyze_gain(&result.signal[3072..3072 + 64], 1, true, None, None)[0];
+            let curve_points = calc_curve(&gain, &mut ctx, Some(next_level), 2.0, None, None, None);
             if !curve_points.is_empty() {
                 si_cur = curve_points
                     .iter()

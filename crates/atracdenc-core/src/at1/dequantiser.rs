@@ -45,8 +45,8 @@ impl Atrac1Dequantiser {
                     let max_quant = 1.0 / ((1_i32 << (word_len - 1)) - 1) as f32;
                     let scale = scale_factor * max_quant;
                     for i in 0..num_specs {
-                        specs[start_pos + i] =
-                            scale * make_sign(stream.read(word_len as usize) as i32, word_len) as f32;
+                        specs[start_pos + i] = scale
+                            * make_sign(stream.read(word_len as usize) as i32, word_len) as f32;
                     }
                 } else {
                     specs[start_pos..start_pos + num_specs].fill(0.0);

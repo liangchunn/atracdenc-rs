@@ -79,12 +79,7 @@ fn weighted_mean(values: &[f32], weights: &[f32]) -> f32 {
     assert_eq!(values.len(), weights.len());
     let wsum: f32 = weights.iter().sum();
     assert!(wsum > 0.0);
-    values
-        .iter()
-        .zip(weights)
-        .map(|(v, w)| v * w)
-        .sum::<f32>()
-        / wsum
+    values.iter().zip(weights).map(|(v, w)| v * w).sum::<f32>() / wsum
 }
 
 struct Noise {
@@ -146,7 +141,10 @@ fn build_atrac3_energy(mut sample: impl FnMut(usize) -> f32) -> Vec<f32> {
                 s2.as_mut_slice(),
                 s3.as_mut_slice(),
             ];
-            analysis.analysis(&pcm[frame * FRAME_SZ..(frame + 1) * FRAME_SZ], &mut sub_refs);
+            analysis.analysis(
+                &pcm[frame * FRAME_SZ..(frame + 1) * FRAME_SZ],
+                &mut sub_refs,
+            );
         }
 
         for band in 0..SUBBANDS {

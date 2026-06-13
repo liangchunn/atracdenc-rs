@@ -111,7 +111,9 @@ impl PcmWriter for WavWriter {
             let encoded = to_int(clipped * 32768.0).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
             writer.write_sample(encoded);
         }
-        writer.flush().map_err(|_| PcmEngineError::WrongReadBuffer)?;
+        writer
+            .flush()
+            .map_err(|_| PcmEngineError::WrongReadBuffer)?;
         Ok(())
     }
 }

@@ -103,20 +103,18 @@ impl<const N_IN: usize> Qmf<N_IN> {
             self.pcm_odd[HALF_HISTORY + k] = input[2 * k + 1];
         }
 
-        let we = QMF_WINDOW_EVEN.as_ptr();
-        let wo = QMF_WINDOW_ODD.as_ptr();
-        let pe = self.pcm_even.as_ptr();
-        let po = self.pcm_odd.as_ptr();
         for out_pos in 0..half {
-            let mut lo = 0.0_f32;
-            let mut hi = 0.0_f32;
             let off = out_pos;
-            for i in 0..24 {
-                unsafe {
-                    lo += *wo.add(i) * *po.add(off + i);
-                    hi += *we.add(i) * *pe.add(off + i);
-                }
-            }
+            let lo = QMF_WINDOW_ODD
+                .iter()
+                .zip(&self.pcm_odd[off..off + 24])
+                .map(|(w, p)| w * p)
+                .sum::<f32>();
+            let hi = QMF_WINDOW_EVEN
+                .iter()
+                .zip(&self.pcm_even[off..off + 24])
+                .map(|(w, p)| w * p)
+                .sum::<f32>();
             let temp = hi;
             upper[out_pos] = lo - hi;
             lower[out_pos] = lo + temp;
@@ -134,20 +132,18 @@ impl<const N_IN: usize> Qmf<N_IN> {
             self.pcm_diffs[HALF_HISTORY + j] = lower[j] - upper[j];
         }
 
-        let we = QMF_WINDOW_EVEN.as_ptr();
-        let wo = QMF_WINDOW_ODD.as_ptr();
-        let sums = self.pcm_sums.as_ptr();
-        let diffs = self.pcm_diffs.as_ptr();
         for j in 0..half {
-            let mut s1 = 0.0_f32;
-            let mut s2 = 0.0_f32;
             let off = j;
-            for i in 0..24 {
-                unsafe {
-                    s1 += *we.add(i) * *sums.add(off + i);
-                    s2 += *wo.add(i) * *diffs.add(off + i);
-                }
-            }
+            let s1 = QMF_WINDOW_EVEN
+                .iter()
+                .zip(&self.pcm_sums[off..off + 24])
+                .map(|(w, p)| w * p)
+                .sum::<f32>();
+            let s2 = QMF_WINDOW_ODD
+                .iter()
+                .zip(&self.pcm_diffs[off..off + 24])
+                .map(|(w, p)| w * p)
+                .sum::<f32>();
             out[j * 2] = s2;
             out[j * 2 + 1] = s1;
         }

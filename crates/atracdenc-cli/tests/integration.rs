@@ -67,6 +67,10 @@ fn assert_success(output: Output) {
     );
 }
 
+fn read_be_u32(bytes: &[u8]) -> u32 {
+    u32::from_be_bytes(bytes.try_into().unwrap())
+}
+
 #[test]
 fn missing_input_reports_open_error_before_wav_validation() {
     let dir = tempdir("missing-input");
@@ -152,6 +156,32 @@ fn utf8_atrac3_output_extensions_succeed() {
         ]));
         assert!(fs::metadata(out).unwrap().len() > 0);
     }
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn atrac3_rm_output_uses_computed_frame_count() {
+    let dir = tempdir("rm-frame-count");
+    let input = dir.join("in.wav");
+    let out = dir.join("out.rm");
+    write_wav(&input, 4096);
+
+    assert_success(run(&[
+        "-e",
+        "atrac3",
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--notonal",
+        "--nostdout",
+    ]));
+
+    let bytes = fs::read(&out).unwrap();
+    let prop_pos = bytes.windows(4).position(|w| w == b"PROP").unwrap();
+    let data_pos = bytes.windows(4).position(|w| w == b"DATA").unwrap();
+    assert_eq!(4, read_be_u32(&bytes[prop_pos + 26..prop_pos + 30]));
+    assert_eq!(4, read_be_u32(&bytes[data_pos + 10..data_pos + 14]));
     let _ = fs::remove_dir_all(dir);
 }
 

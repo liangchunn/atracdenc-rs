@@ -1,8 +1,8 @@
 use crate::{
     at3::data::{
-        BLOCK_SIZE_TAB, BLOCKS_PER_BAND, CLC_LENGTH_TAB, ContainerParams, GainEnergyScale,
-        HUFF_TABLES, MAX_BFUS, MAX_QUANT, MAX_SPECS, MAX_SPECS_PER_BLOCK, SPECS_PER_BLOCK,
-        SPECS_START_LONG, TonalVal, mantissa_to_clc_idx, mantissas_to_vlc_index,
+        BLOCK_SIZE_TAB, BLOCKS_PER_BAND, BfuAllocMode, CLC_LENGTH_TAB, ContainerParams,
+        GainEnergyScale, HUFF_TABLES, MAX_BFUS, MAX_QUANT, MAX_SPECS, MAX_SPECS_PER_BLOCK,
+        SPECS_PER_BLOCK, SPECS_START_LONG, TonalVal, mantissa_to_clc_idx, mantissas_to_vlc_index,
     },
     atrac::{
         psy::{analyze_scale_factor_spread, calc_ath},
@@ -70,14 +70,24 @@ impl SingleChannelElement {
 pub struct Atrac3BitStreamWriter {
     params: ContainerParams,
     bfu_idx_const: u32,
+    bfu_alloc_mode: BfuAllocMode,
     out_buffer: Vec<u8>,
 }
 
 impl Atrac3BitStreamWriter {
     pub fn new(params: ContainerParams, bfu_idx_const: u32) -> Self {
+        Self::with_alloc_mode(params, bfu_idx_const, BfuAllocMode::Fast)
+    }
+
+    pub fn with_alloc_mode(
+        params: ContainerParams,
+        bfu_idx_const: u32,
+        bfu_alloc_mode: BfuAllocMode,
+    ) -> Self {
         Self {
             params,
             bfu_idx_const,
+            bfu_alloc_mode,
             out_buffer: vec![0; params.frame_sz as usize],
         }
     }
@@ -88,6 +98,10 @@ impl Atrac3BitStreamWriter {
 
     pub fn bfu_idx_const(&self) -> u32 {
         self.bfu_idx_const
+    }
+
+    pub fn bfu_alloc_mode(&self) -> BfuAllocMode {
+        self.bfu_alloc_mode
     }
 
     pub fn frame_buffer(&self) -> &[u8] {
@@ -153,6 +167,7 @@ impl Atrac3BitStreamWriter {
                 sce: Some(sce),
                 target_bits: bits_to_alloc[channel].max(1) as u16,
                 bfu_idx_const: self.bfu_idx_const,
+                bfu_alloc_mode: self.bfu_alloc_mode,
                 loudness,
                 ..EncodeCtx::default()
             };
@@ -532,6 +547,48 @@ fn configure_and_encode_specs(
         .min(sce.scaled_blocks.len() as u16);
     ctx.alloc_init_done = true;
 
+    let (mut best_precision, best_mode, best_mantissas) = match ctx.bfu_alloc_mode {
+        BfuAllocMode::Fast => search_best_allocation(ctx, sce)?,
+        BfuAllocMode::Parity => loop {
+            let result = search_best_allocation(ctx, sce)?;
+            if ctx.bfu_idx_const == 0 && result.0.len() > 1 {
+                let mut num_bfu = result.0.len() as u16;
+                if check_bfus(&mut num_bfu, &result.0) {
+                    ctx.num_bfu = num_bfu;
+                    continue;
+                }
+            }
+            break result;
+        },
+    };
+
+    if ctx.bfu_alloc_mode == BfuAllocMode::Fast && ctx.bfu_idx_const == 0 {
+        while best_precision.len() > 1 {
+            let mut num_bfu = best_precision.len() as u16;
+            if check_bfus(&mut num_bfu, &best_precision) {
+                best_precision.truncate(num_bfu as usize);
+            } else {
+                break;
+            }
+        }
+    }
+
+    ctx.precision_per_block = best_precision;
+    ctx.coding_mode = best_mode;
+    ctx.mantissas = best_mantissas;
+    encode_specs(
+        sce,
+        bitstream,
+        &ctx.precision_per_block,
+        ctx.coding_mode,
+        &ctx.mantissas,
+    )
+}
+
+fn search_best_allocation(
+    ctx: &mut EncodeCtx<'_>,
+    sce: &SingleChannelElement,
+) -> io::Result<(Vec<u32>, u8, [i32; MAX_SPECS])> {
     let mut lo = -8.0_f32;
     let mut hi = 20.0_f32;
     let mut best_precision = vec![0; ctx.num_bfu as usize];
@@ -591,27 +648,7 @@ fn configure_and_encode_specs(
         best_mantissas = ctx.mantissas;
     }
 
-    if ctx.bfu_idx_const == 0 {
-        while best_precision.len() > 1 {
-            let mut num_bfu = best_precision.len() as u16;
-            if check_bfus(&mut num_bfu, &best_precision) {
-                best_precision.truncate(num_bfu as usize);
-            } else {
-                break;
-            }
-        }
-    }
-
-    ctx.precision_per_block = best_precision;
-    ctx.coding_mode = best_mode;
-    ctx.mantissas = best_mantissas;
-    encode_specs(
-        sce,
-        bitstream,
-        &ctx.precision_per_block,
-        ctx.coding_mode,
-        &ctx.mantissas,
-    )
+    Ok((best_precision, best_mode, best_mantissas))
 }
 
 pub fn calc_specs_bits_consumption(
@@ -814,6 +851,7 @@ pub(crate) struct EncodeCtx<'a> {
     pub sce: Option<&'a SingleChannelElement>,
     pub target_bits: u16,
     pub bfu_idx_const: u32,
+    pub bfu_alloc_mode: BfuAllocMode,
     pub loudness: f32,
     pub alloc_init_done: bool,
     pub spread: f32,
@@ -830,6 +868,7 @@ impl<'a> Default for EncodeCtx<'a> {
             sce: None,
             target_bits: 0,
             bfu_idx_const: 0,
+            bfu_alloc_mode: BfuAllocMode::Fast,
             loudness: 0.0,
             alloc_init_done: false,
             spread: 0.0,
@@ -914,6 +953,23 @@ mod tests {
     }
 
     #[test]
+    fn check_bfus_trims_one_trailing_zero_bfu() {
+        let mut num_bfu = 3;
+        assert!(check_bfus(&mut num_bfu, &[4, 2, 0]));
+        assert_eq!(2, num_bfu);
+
+        let mut num_bfu = 3;
+        assert!(!check_bfus(&mut num_bfu, &[4, 0, 1]));
+        assert_eq!(3, num_bfu);
+    }
+
+    #[test]
+    fn bitstream_writer_defaults_to_fast_bfu_allocation() {
+        let writer = Atrac3BitStreamWriter::new(crate::at3::data::LP2, 0);
+        assert_eq!(BfuAllocMode::Fast, writer.bfu_alloc_mode());
+    }
+
+    #[test]
     fn block_band_uses_atrac3_bfu_boundaries() {
         assert_eq!(0, block_band(0));
         assert_eq!(0, block_band(17));
@@ -954,6 +1010,21 @@ mod tests {
     #[test]
     fn non_empty_scaled_blocks_encode_spectral_payload() {
         let mut writer = Atrac3BitStreamWriter::new(crate::at3::data::LP2, 0);
+        let mut sce = SingleChannelElement::new(4);
+        sce.scaled_blocks.push(ScaledBlock {
+            scale_factor_index: 32,
+            values: vec![0.5; 8],
+            energy: 1.0,
+        });
+
+        let frame = writer.build_sound_unit_frame(&[sce], 1.0).unwrap();
+        assert_eq!(crate::at3::data::LP2.frame_sz as usize, frame.len());
+    }
+
+    #[test]
+    fn parity_bfu_allocation_encodes_valid_spectral_payload() {
+        let mut writer =
+            Atrac3BitStreamWriter::with_alloc_mode(crate::at3::data::LP2, 0, BfuAllocMode::Parity);
         let mut sce = SingleChannelElement::new(4);
         sce.scaled_blocks.push(ScaledBlock {
             scale_factor_index: 32,

@@ -11,7 +11,7 @@ use atracdenc_core::{
         data::{EncodeSettings as At1EncodeSettings, WindowMode},
     },
     at3::{
-        data::{EncodeSettings as At3EncodeSettings, LP4},
+        data::{BfuAllocMode as CoreBfuAllocMode, EncodeSettings as At3EncodeSettings, LP4},
         encoder::Atrac3Encoder,
     },
     container::{
@@ -68,6 +68,8 @@ struct CliOptions {
     bfu_idx_const: u32,
     #[arg(long = "bfuidxfast")]
     bfu_idx_fast: bool,
+    #[arg(long = "at3-bfu-mode", value_enum, default_value = "fast")]
+    at3_bfu_mode: At3BfuMode,
     #[arg(long = "notransient", num_args = 0..=1, require_equals = true, default_missing_value = "0")]
     no_transient: Option<u32>,
     #[arg(long = "nostdout")]
@@ -100,6 +102,12 @@ enum Container {
     Raw,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+enum At3BfuMode {
+    Fast,
+    Parity,
+}
+
 fn main() {
     if let Err(err) = run(Cli::parse()) {
         eprintln!("error: {err}");
@@ -112,10 +120,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         Some(Command::Encode(command)) => command.opts,
         None => cli.opts,
     };
-
-    if opts.bfu_idx_fast && !opts.no_stdout {
-        eprintln!("warning: --bfuidxfast is deprecated and ignored");
-    }
 
     if opts.decode {
         decode(opts)
@@ -151,6 +155,7 @@ fn encode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
     if reader.bits_per_sample() != 16 {
         return Err(invalid_input("unsupported WAV format: only 16-bit PCM is supported").into());
     }
+    let frame_count = encoded_frame_count(reader.total_samples(), codec)?;
 
     let container = opts
         .container
@@ -160,7 +165,7 @@ fn encode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
         return Err(invalid_input("ATRAC3plus encoding is not ported yet").into());
     }
 
-    let mut processor = build_encoder(&opts, codec, container, channels, sample_rate)?;
+    let mut processor = build_encoder(&opts, codec, container, channels, sample_rate, frame_count)?;
     let mut engine = PcmEngine::new(
         frame_samples(codec) as u16,
         channels,
@@ -244,10 +249,11 @@ fn build_encoder(
     container: Container,
     channels: usize,
     sample_rate: u32,
+    frame_count: u32,
 ) -> Result<Box<dyn Processor>, Box<dyn Error>> {
     match codec {
         Codec::Atrac1 => {
-            let output = build_atrac1_output(opts, container, channels)?;
+            let output = build_atrac1_output(opts, container, channels, frame_count)?;
             let settings = At1EncodeSettings {
                 bfu_idx_const: opts.bfu_idx_const,
                 window_mode: if opts.no_transient.is_some() {
@@ -264,7 +270,7 @@ fn build_encoder(
                 (Codec::Atrac3Lp4, None) => LP4.bitrate,
                 (_, bitrate) => bitrate.unwrap_or(0) * 1024,
             };
-            let settings = At3EncodeSettings::new(
+            let mut settings = At3EncodeSettings::new(
                 bitrate,
                 opts.no_gain_control,
                 opts.no_tonal_components,
@@ -272,7 +278,18 @@ fn build_encoder(
                 opts.bfu_idx_const,
             )
             .ok_or_else(|| invalid_input("unsupported ATRAC3 bitrate"))?;
-            let output = build_atrac3_output(opts, container, channels, sample_rate, settings)?;
+            settings.bfu_alloc_mode = match opts.at3_bfu_mode {
+                At3BfuMode::Fast => CoreBfuAllocMode::Fast,
+                At3BfuMode::Parity => CoreBfuAllocMode::Parity,
+            };
+            let output = build_atrac3_output(
+                opts,
+                container,
+                channels,
+                sample_rate,
+                frame_count,
+                settings,
+            )?;
             let yaml_log = opts
                 .yaml_log
                 .as_ref()
@@ -293,6 +310,7 @@ fn build_atrac1_output(
     opts: &CliOptions,
     container: Container,
     channels: usize,
+    frame_count: u32,
 ) -> Result<Box<dyn CompressedOutput>, Box<dyn Error>> {
     let output = opts.output.as_ref().expect("output validated");
     let file = BufWriter::new(File::create(output)?);
@@ -301,7 +319,7 @@ fn build_atrac1_output(
             file,
             "atracdenc-rust",
             channels,
-            0,
+            frame_count,
         )?)),
         Container::Raw => Ok(Box::new(RawOutput::new(
             file,
@@ -317,6 +335,7 @@ fn build_atrac3_output(
     container: Container,
     channels: usize,
     sample_rate: u32,
+    frame_count: u32,
     settings: At3EncodeSettings,
 ) -> Result<Box<dyn CompressedOutput>, Box<dyn Error>> {
     let output = opts.output.as_ref().expect("output validated");
@@ -340,14 +359,14 @@ fn build_atrac3_output(
         Container::Riff => Ok(Box::new(At3Output::atrac3(
             file,
             2,
-            0,
+            frame_count,
             params.frame_sz as u32,
             params.joint_stereo,
         )?)),
         Container::Rm => Ok(Box::new(RmOutput::new(
             file,
             channels,
-            0,
+            frame_count,
             params.frame_sz as u32,
             params.joint_stereo,
         )?)),
@@ -384,6 +403,19 @@ fn validate_encode_flags(opts: &CliOptions, codec: Codec) -> Result<(), io::Erro
         && !(32..=384).contains(&bitrate)
     {
         return Err(invalid_input("--bitrate must be in the range 32..384"));
+    }
+    if codec == Codec::Atrac1 && opts.bfu_idx_const > 8 {
+        return Err(invalid_input(
+            "--bfuidxconst must be in the range 0..8 for atrac1",
+        ));
+    }
+    if matches!(codec, Codec::Atrac3 | Codec::Atrac3Lp4)
+        && opts.bfu_idx_fast
+        && opts.at3_bfu_mode == At3BfuMode::Parity
+    {
+        return Err(invalid_input(
+            "--bfuidxfast cannot be combined with --at3-bfu-mode parity",
+        ));
     }
     Ok(())
 }
@@ -422,12 +454,17 @@ fn infer_container(output: &Path, codec: Codec) -> Container {
         "oma" | "omg" => Container::Oma,
         "at3" | "wav" => Container::Riff,
         "rm" | "ra" => Container::Rm,
-        "raw" => Container::Raw,
+        "raw" | "dat" => Container::Raw,
         _ => match codec {
             Codec::Atrac1 => Container::Aea,
             Codec::Atrac3 | Codec::Atrac3Lp4 | Codec::Atrac3plus => Container::Oma,
         },
     }
+}
+
+fn encoded_frame_count(total_samples: u64, codec: Codec) -> Result<u32, io::Error> {
+    let frames = total_samples.div_ceil(frame_samples(codec) as u64);
+    u32::try_from(frames).map_err(|_| invalid_input("input is too long for container metadata"))
 }
 
 fn frame_samples(codec: Codec) -> usize {
@@ -481,6 +518,8 @@ mod tests {
             "12",
             "--yaml-log",
             "gain.yaml",
+            "--at3-bfu-mode",
+            "parity",
             "--nostdout",
         ])
         .unwrap();
@@ -490,6 +529,7 @@ mod tests {
         assert!(cli.opts.no_gain_control);
         assert!(cli.opts.no_tonal_components);
         assert_eq!(12, cli.opts.bfu_idx_const);
+        assert_eq!(At3BfuMode::Parity, cli.opts.at3_bfu_mode);
         assert_eq!(Some(PathBuf::from("gain.yaml")), cli.opts.yaml_log);
     }
 
@@ -535,6 +575,64 @@ mod tests {
         assert_eq!(
             Container::Oma,
             infer_container(Path::new("music.bin"), Codec::Atrac3)
+        );
+        assert_eq!(
+            Container::Raw,
+            infer_container(Path::new("music.dat"), Codec::Atrac3)
+        );
+    }
+
+    #[test]
+    fn validates_atrac1_bfu_idx_const_range() {
+        let opts = CliOptions {
+            encode: Some(Codec::Atrac1),
+            decode: false,
+            input: None,
+            output: None,
+            container: None,
+            bitrate: None,
+            bfu_idx_const: 9,
+            bfu_idx_fast: false,
+            at3_bfu_mode: At3BfuMode::Fast,
+            no_transient: None,
+            no_stdout: true,
+            no_tonal_components: false,
+            no_gain_control: false,
+            yaml_log: None,
+            mono: false,
+        };
+
+        assert_eq!(
+            "--bfuidxconst must be in the range 0..8 for atrac1",
+            validate_encode_flags(&opts, Codec::Atrac1)
+                .unwrap_err()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn at3_bfu_mode_defaults_to_fast() {
+        let cli = Cli::try_parse_from(["atracdenc", "-e", "atrac3"]).unwrap();
+        assert_eq!(At3BfuMode::Fast, cli.opts.at3_bfu_mode);
+    }
+
+    #[test]
+    fn rejects_conflicting_at3_bfu_mode_flags() {
+        let cli = Cli::try_parse_from([
+            "atracdenc",
+            "-e",
+            "atrac3",
+            "--bfuidxfast",
+            "--at3-bfu-mode",
+            "parity",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            "--bfuidxfast cannot be combined with --at3-bfu-mode parity",
+            validate_encode_flags(&cli.opts, Codec::Atrac3)
+                .unwrap_err()
+                .to_string()
         );
     }
 

@@ -63,9 +63,10 @@ impl Atrac3Encoder {
         Self {
             output,
             settings,
-            bitstream: Atrac3BitStreamWriter::new(
+            bitstream: Atrac3BitStreamWriter::with_alloc_mode(
                 settings.container_params,
                 settings.bfu_idx_const,
+                settings.bfu_alloc_mode,
             ),
             analysis_filter_bank: (0..max_channels)
                 .map(|_| Atrac3AnalysisFilterBank::new())

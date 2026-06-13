@@ -695,12 +695,25 @@ impl Default for GainEnergyScale {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum BfuAllocMode {
+    Fast,
+    Parity,
+}
+
+impl Default for BfuAllocMode {
+    fn default() -> Self {
+        Self::Fast
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct EncodeSettings {
     pub container_params: ContainerParams,
     pub no_gain_control: bool,
     pub no_tonal_components: bool,
     pub source_channels: u8,
     pub bfu_idx_const: u32,
+    pub bfu_alloc_mode: BfuAllocMode,
 }
 
 impl EncodeSettings {
@@ -717,6 +730,7 @@ impl EncodeSettings {
             no_tonal_components,
             source_channels,
             bfu_idx_const,
+            bfu_alloc_mode: BfuAllocMode::Fast,
         })
     }
 }
@@ -729,6 +743,7 @@ impl Default for EncodeSettings {
             no_tonal_components: false,
             source_channels: 2,
             bfu_idx_const: 0,
+            bfu_alloc_mode: BfuAllocMode::Fast,
         }
     }
 }

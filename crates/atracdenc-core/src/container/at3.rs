@@ -83,6 +83,15 @@ impl<W: Write + Seek> At3Output<W> {
         num_frames: u32,
         frame_size: u32,
     ) -> io::Result<Self> {
+        let channels_u16 = u16::try_from(channels).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "too many ATRAC3plus channels")
+        })?;
+        let frame_size_u16 = u16::try_from(frame_size).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ATRAC3plus frame size too large",
+            )
+        })?;
         let mut header = Vec::with_capacity(AT3P_HEADER_SIZE);
         let file_size = AT3P_HEADER_SIZE as u64 + u64::from(num_frames) * u64::from(frame_size);
         if file_size >= u64::from(u32::MAX) {
@@ -93,13 +102,13 @@ impl<W: Write + Seek> At3Output<W> {
         }
         write_riff_prefix(&mut header, (file_size - 8) as u32, 40);
         push_u16(&mut header, 0xfffe);
-        push_u16(&mut header, channels as u16);
+        push_u16(&mut header, channels_u16);
         push_u32(&mut header, WAVE_SAMPLE_RATE);
         push_u32(
             &mut header,
             frame_size * WAVE_SAMPLE_RATE / AT3P_SAMPLES_PER_FRAME,
         );
-        push_u16(&mut header, frame_size as u16);
+        push_u16(&mut header, frame_size_u16);
         push_u16(&mut header, 16);
         push_u16(&mut header, 22);
         push_u16(&mut header, 16);
@@ -250,5 +259,23 @@ mod tests {
         assert_eq!(ATRAC3PLUS_SUBFORMAT_GUID, bytes[44..60]);
         assert_eq!(b"fact", &bytes[60..64]);
         assert_eq!(b"data", &bytes[72..76]);
+    }
+
+    #[test]
+    fn atrac3plus_rejects_oversized_u16_fields() {
+        assert_eq!(
+            "too many ATRAC3plus channels",
+            At3Output::atrac3plus(Cursor::new(Vec::new()), usize::from(u16::MAX) + 1, 0, 376)
+                .err()
+                .unwrap()
+                .to_string()
+        );
+        assert_eq!(
+            "ATRAC3plus frame size too large",
+            At3Output::atrac3plus(Cursor::new(Vec::new()), 2, 0, u32::from(u16::MAX) + 1)
+                .err()
+                .unwrap()
+                .to_string()
+        );
     }
 }

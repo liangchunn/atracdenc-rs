@@ -40,7 +40,7 @@ ATRAC3plus encoding is not yet ported. The CLI will report an error if
 | OMA | `.oma`, `.omg` | — | Yes |
 | RIFF/WAV | `.at3`, `.wav` | — | Yes |
 | RealMedia | `.rm`, `.ra` | — | Yes |
-| Raw frames | `.raw` | Yes | Yes |
+| Raw frames | `.raw`, `.dat` | Yes | Yes |
 
 Containers are inferred from the output file extension. Use `--container` to
 override.
@@ -56,6 +56,9 @@ atracdenc -e atrac1 -d -i input.aea -o output.wav
 
 # ATRAC3 encode, LP2 stereo (~132 kbps)
 atracdenc -e atrac3 -i input.wav -o output.oma
+
+# ATRAC3 C++-parity BFU allocation (slower, closer to reference output)
+atracdenc -e atrac3 --at3-bfu-mode parity -i input.wav -o output.oma
 
 # ATRAC3 LP4 encode, joint stereo (~66 kbps)
 atracdenc -e atrac3-lp4 -i input.wav -o output.oma
@@ -80,7 +83,8 @@ atracdenc -e atrac3 --nostdout -i input.wav -o output.oma
 ```
 
 Input must be 44100 Hz, 16-bit, mono or stereo WAV. Decode only supports ATRAC1
-from AEA input.
+from AEA input. ATRAC3 uses fast BFU allocation by default; use
+`--at3-bfu-mode parity` when comparing encoder output against the C++ reference.
 
 ## Building
 

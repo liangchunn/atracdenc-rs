@@ -88,7 +88,7 @@ from AEA input. ATRAC3 uses fast BFU allocation by default; use
 
 ## Building
 
-Requires Rust 1.85+ (edition 2024).
+Requires Rust 1.96.0 (edition 2024).
 
 ```bash
 cargo build --release -p atracdenc-cli

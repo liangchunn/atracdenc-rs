@@ -112,6 +112,10 @@ pub struct Atrac1BitAllocator {
 
 impl Atrac1BitAllocator {
     pub fn new(bfu_idx_const: u32) -> Self {
+        debug_assert!(
+            bfu_idx_const <= crate::at1::data::MAX_BFU_IDX_CONST,
+            "bfu_idx_const out of range; construct via Atrac1Encoder::try_new"
+        );
         Self {
             booster: BitsBooster::new(),
             bfu_idx_const,

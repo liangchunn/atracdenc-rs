@@ -1,6 +1,6 @@
 use std::{f32::consts::PI, sync::LazyLock};
 
-use crate::bitstream::BitStream;
+use crate::{AtracdencError, bitstream::BitStream};
 
 pub const MAX_BFUS: usize = 52;
 pub const NUM_QMF: usize = 3;
@@ -26,6 +26,12 @@ pub const SPECS_START_SHORT: [u32; MAX_BFUS] = [
     416, 448, 480, 268, 300, 332, 364, 396, 428, 460, 492,
 ];
 pub const BFU_AMOUNT_TAB: [u32; 8] = [20, 28, 32, 36, 40, 44, 48, 52];
+
+/// Maximum valid `bfu_idx_const`. A value of `0` selects automatic BFU count
+/// selection; values `1..=8` map onto the eight [`BFU_AMOUNT_TAB`] entries via
+/// `bfu_idx_const - 1`, so anything larger would index out of bounds during
+/// bit allocation.
+pub const MAX_BFU_IDX_CONST: u32 = BFU_AMOUNT_TAB.len() as u32;
 
 pub static SCALE_TABLE: LazyLock<[f32; 64]> = LazyLock::new(|| {
     let mut table = [0.0; 64];
@@ -54,6 +60,30 @@ pub struct EncodeSettings {
     pub bfu_idx_const: u32,
     pub window_mode: WindowMode,
     pub window_mask: u32,
+}
+
+impl EncodeSettings {
+    /// Construct ATRAC1 encode settings, validating codec invariants.
+    ///
+    /// `bfu_idx_const` must be in `0..=`[`MAX_BFU_IDX_CONST`]; `0` enables
+    /// automatic BFU count selection. Out-of-range values would index past
+    /// [`BFU_AMOUNT_TAB`] during bit allocation, so they are rejected here.
+    pub fn new(
+        bfu_idx_const: u32,
+        window_mode: WindowMode,
+        window_mask: u32,
+    ) -> Result<Self, AtracdencError> {
+        if bfu_idx_const > MAX_BFU_IDX_CONST {
+            return Err(AtracdencError::InvalidInput(format!(
+                "bfu_idx_const must be in the range 0..={MAX_BFU_IDX_CONST} for atrac1"
+            )));
+        }
+        Ok(Self {
+            bfu_idx_const,
+            window_mode,
+            window_mask,
+        })
+    }
 }
 
 impl Default for EncodeSettings {
@@ -125,6 +155,20 @@ mod tests {
         assert!((SCALE_TABLE[0] - 2.0_f32.powf(-21.0)).abs() < 1.0e-12);
         assert!((SCALE_TABLE[63] - 1.0).abs() < 1.0e-6);
         assert!((SINE_WINDOW[0] - (PI / 64.0 * 0.5).sin()).abs() < 1.0e-7);
+    }
+
+    #[test]
+    fn encode_settings_new_validates_bfu_idx_const() {
+        assert!(EncodeSettings::new(0, WindowMode::Auto, 0).is_ok());
+        assert!(EncodeSettings::new(MAX_BFU_IDX_CONST, WindowMode::Auto, 0).is_ok());
+
+        let err = EncodeSettings::new(MAX_BFU_IDX_CONST + 1, WindowMode::Auto, 0)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            "invalid input: bfu_idx_const must be in the range 0..=8 for atrac1",
+            err
+        );
     }
 
     #[test]

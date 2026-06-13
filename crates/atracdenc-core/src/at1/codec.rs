@@ -39,6 +39,24 @@ pub struct Atrac1Encoder {
 }
 
 impl Atrac1Encoder {
+    /// Construct an encoder, validating that `settings` satisfy ATRAC1 codec
+    /// invariants (see [`EncodeSettings::new`]). Prefer this over [`Self::new`]
+    /// when settings come from untrusted input.
+    pub fn try_new(
+        output: Box<dyn CompressedOutput>,
+        settings: EncodeSettings,
+    ) -> Result<Self, AtracdencError> {
+        // Re-run validation so callers that build `EncodeSettings` via struct
+        // literal (bypassing `EncodeSettings::new`) still get a recoverable
+        // error instead of a panic during bit allocation.
+        EncodeSettings::new(
+            settings.bfu_idx_const,
+            settings.window_mode,
+            settings.window_mask,
+        )?;
+        Ok(Self::new(output, settings))
+    }
+
     pub fn new(output: Box<dyn CompressedOutput>, settings: EncodeSettings) -> Self {
         let channels = output.channels().max(1);
         Self {
@@ -364,6 +382,38 @@ mod tests {
                 .push(data.samples()[..size as usize * data.channels() as usize].to_vec());
             Ok(())
         }
+    }
+
+    #[test]
+    fn try_new_rejects_out_of_range_bfu_idx_const() {
+        let shared = SharedOutput {
+            frames: Rc::new(RefCell::new(Vec::new())),
+            channels: 1,
+        };
+        let settings = EncodeSettings {
+            bfu_idx_const: crate::at1::data::MAX_BFU_IDX_CONST + 1,
+            ..EncodeSettings::default()
+        };
+        match Atrac1Encoder::try_new(Box::new(shared), settings) {
+            Err(AtracdencError::InvalidInput(_)) => {}
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected out-of-range bfu_idx_const to be rejected"),
+        }
+    }
+
+    #[test]
+    fn try_new_accepts_valid_bfu_idx_const() {
+        let shared = SharedOutput {
+            frames: Rc::new(RefCell::new(Vec::new())),
+            channels: 1,
+        };
+        let settings = EncodeSettings::new(
+            crate::at1::data::MAX_BFU_IDX_CONST,
+            crate::at1::data::WindowMode::Auto,
+            0,
+        )
+        .unwrap();
+        assert!(Atrac1Encoder::try_new(Box::new(shared), settings).is_ok());
     }
 
     #[test]

@@ -10,5 +10,5 @@ name = "atracdenc"
 path = "src/main.rs"
 
 [dependencies]
-atracdenc-core = { path = "../atracdenc-core" }
+atracdenc = { path = "../atracdenc" }
 clap = { version = "4.5.40", features = ["derive"] }

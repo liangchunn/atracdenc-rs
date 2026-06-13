@@ -29,12 +29,18 @@ tests run in default `test` profile.
 
 ## Architecture
 
-Virtual workspace with two crates:
+Virtual workspace with three crates:
 
 | Crate | Path | Role |
 |---|---|---|
-| `atracdenc-core` | `crates/atracdenc-core/` | Library: ATRAC1 encode/decode + ATRAC3 encode |
-| `atracdenc-cli` | `crates/atracdenc-cli/` | Binary `atracdenc` wrapping core via clap |
+| `atracdenc-core` | `crates/atracdenc-core/` | Library: low-level ATRAC1 encode/decode + ATRAC3 encode primitives |
+| `atracdenc` | `crates/atracdenc/` | High-level facade: `EncodeBuilder`/`DecodeBuilder`, validation, container inference |
+| `atracdenc-cli` | `crates/atracdenc-cli/` | Binary `atracdenc` wrapping the `atracdenc` facade via clap |
+
+The facade (`atracdenc`) owns the common encode/decode orchestration, WAV/codec/container
+validation, and container inference. The CLI only does clap parsing and maps options into the
+builder API. Library consumers should depend on `atracdenc` for the ergonomic API and on
+`atracdenc-core` only for low-level/advanced use.
 
 Top-level module map of core (`lib.rs`):
 `at1` `at3` `atrac` `bitstream` `container` `dsp` `error` `pcm` `util`

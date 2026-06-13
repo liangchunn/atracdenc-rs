@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/atracdenc-core", "crates/atracdenc-cli"]
+members = [
+    "crates/atracdenc",
+    "crates/atracdenc-core",
+    "crates/atracdenc-cli",
+]
 
 [workspace.package]
 version = "0.1.0"

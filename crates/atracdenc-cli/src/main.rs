@@ -1,33 +1,6 @@
-use std::{
-    error::Error,
-    fs::File,
-    io::{self, BufWriter},
-    path::{Path, PathBuf},
-};
+use std::{error::Error, path::PathBuf};
 
-use atracdenc_core::{
-    AtracdencError,
-    at1::{
-        codec::{Atrac1Decoder, Atrac1Encoder},
-        data::{EncodeSettings as At1EncodeSettings, WindowMode},
-    },
-    at3::{
-        data::{BfuAllocMode as CoreBfuAllocMode, EncodeSettings as At3EncodeSettings, LP4},
-        encoder::Atrac3Encoder,
-    },
-    container::{
-        CompressedInput, CompressedOutput,
-        aea::{AEA_FRAME_SIZE, AeaInput, AeaOutput},
-        at3::At3Output,
-        oma::{OmaChannelFormat, OmaCodec, OmaOutput},
-        raw::RawOutput,
-        rm::RmOutput,
-    },
-    pcm::{
-        engine::{PcmEngine, PcmEngineError, Processor},
-        wav::{WavReader, WavWriter},
-    },
-};
+use atracdenc::{At1Settings, At1WindowMode, At3Settings};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
@@ -97,6 +70,17 @@ enum Codec {
     Atrac3plus,
 }
 
+impl From<Codec> for atracdenc::Codec {
+    fn from(value: Codec) -> Self {
+        match value {
+            Codec::Atrac1 => atracdenc::Codec::Atrac1,
+            Codec::Atrac3 => atracdenc::Codec::Atrac3,
+            Codec::Atrac3Lp4 => atracdenc::Codec::Atrac3Lp4,
+            Codec::Atrac3plus => atracdenc::Codec::Atrac3plus,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
 enum Container {
     Aea,
@@ -106,10 +90,31 @@ enum Container {
     Raw,
 }
 
+impl From<Container> for atracdenc::Container {
+    fn from(value: Container) -> Self {
+        match value {
+            Container::Aea => atracdenc::Container::Aea,
+            Container::Oma => atracdenc::Container::Oma,
+            Container::Riff => atracdenc::Container::Riff,
+            Container::Rm => atracdenc::Container::Rm,
+            Container::Raw => atracdenc::Container::Raw,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
 enum At3BfuMode {
     Fast,
     Parity,
+}
+
+impl From<At3BfuMode> for atracdenc::At3BfuMode {
+    fn from(value: At3BfuMode) -> Self {
+        match value {
+            At3BfuMode::Fast => atracdenc::At3BfuMode::Fast,
+            At3BfuMode::Parity => atracdenc::At3BfuMode::Parity,
+        }
+    }
 }
 
 fn main() {
@@ -134,376 +139,72 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
 
 fn encode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
     let codec = opts.encode.unwrap_or(Codec::Atrac1);
-    validate_encode_flags(&opts, codec)?;
+    let mut builder = atracdenc::EncodeBuilder::new()
+        .codec(codec.into())
+        .at1_settings(At1Settings {
+            bfu_idx_const: opts.bfu_idx_const,
+            window_mode: if opts.no_transient.is_some() {
+                At1WindowMode::NoTransient
+            } else {
+                At1WindowMode::Auto
+            },
+            window_mask: opts.no_transient.unwrap_or(0),
+        })
+        .at3_settings(At3Settings {
+            bitrate_kbps: opts.bitrate,
+            no_gain_control: opts.no_gain_control,
+            no_tonal_components: opts.no_tonal_components,
+            bfu_idx_const: opts.bfu_idx_const,
+            bfu_mode: opts.at3_bfu_mode.into(),
+            bfu_idx_fast: opts.bfu_idx_fast,
+        });
 
-    let input = opts
-        .input
-        .as_ref()
-        .ok_or_else(|| invalid_input("missing input file"))?;
-    let output = opts
-        .output
-        .as_ref()
-        .ok_or_else(|| invalid_input("missing output file"))?;
-
-    let reader = WavReader::open(input).map_err(|e| {
-        invalid_input(format!(
-            "unable to open input file {}: {e}",
-            input.display()
-        ))
-    })?;
-    let channels = usize::from(reader.channels());
-    let sample_rate = reader.sample_rate();
-
-    if channels == 0 || channels > 2 {
-        return Err(invalid_input("only mono and stereo WAV input is currently supported").into());
+    if let Some(input) = opts.input {
+        builder = builder.input_path(input);
     }
-    if sample_rate != 44_100 {
-        return Err(invalid_input("unsupported sample rate: only 44100 Hz is supported").into());
+    if let Some(output) = opts.output {
+        builder = builder.output_path(output);
     }
-    if reader.bits_per_sample() != 16 {
-        return Err(invalid_input("unsupported WAV format: only 16-bit PCM is supported").into());
+    if let Some(container) = opts.container {
+        builder = builder.container(container.into());
     }
-    let frame_count = encoded_frame_count(reader.total_samples(), codec)?;
-
-    let container = opts
-        .container
-        .unwrap_or_else(|| infer_container(output, codec));
-    validate_container(codec, container)?;
-    if codec == Codec::Atrac3plus {
-        return Err(invalid_input("ATRAC3plus encoding is not ported yet").into());
+    if let Some(yaml_log) = opts.yaml_log {
+        builder = builder.yaml_log_path(yaml_log);
     }
 
-    let mut processor = build_encoder(&opts, codec, container, channels, sample_rate, frame_count)?;
-    let mut engine = PcmEngine::new(frame_samples(codec), channels, Some(Box::new(reader)), None);
-
-    loop {
-        match engine.apply_process(frame_samples(codec), processor.as_mut()) {
-            Ok(_) => {}
-            Err(AtracdencError::PcmEngine(PcmEngineError::NoDataToRead)) => break,
-            Err(err) => return Err(err.into()),
-        }
-    }
-
+    builder.run()?;
     Ok(())
 }
 
 fn decode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
-    let codec = opts.encode.unwrap_or(Codec::Atrac1);
-    if codec != Codec::Atrac1 {
-        return Err(invalid_input("decode is only supported for atrac1").into());
-    }
-    if opts
-        .container
-        .is_some_and(|container| container != Container::Aea)
-    {
-        return Err(invalid_input("decode is only supported from AEA input").into());
-    }
     if opts.yaml_log.is_some() {
         return Err(invalid_input("--yaml-log is only supported for ATRAC3 encode").into());
     }
 
-    let input_path = opts
-        .input
-        .as_ref()
-        .ok_or_else(|| invalid_input("missing input file"))?;
-    let output_path = opts
-        .output
-        .as_ref()
-        .ok_or_else(|| invalid_input("missing output file"))?;
-    let input_file = File::open(input_path).map_err(|e| {
-        invalid_input(format!(
-            "unable to open input file {}: {e}",
-            input_path.display()
-        ))
-    })?;
-    let input = AeaInput::new(input_file)?;
-    let channels = input.channels().max(1);
-    // Match the original atracdenc decode loop: the PCM engine uses a 4096-sample
-    // buffer and the driver keeps calling ApplyProcess while the reported audio
-    // length has not yet been reached (`while totalSamples > processed`). Because
-    // the engine processes whole 4096-sample blocks, the decoder emits the final
-    // block in full, rounding the output length up to the next engine block.
-    // See atracdenc/src/main.cpp:701 and atracdenc/src/pcmengin.h:152.
-    const DECODE_BUFFER_SAMPLES: usize = 4096;
-    let total_samples = input.length_in_samples();
-    let writer = WavWriter::create(output_path, channels as u16, 44_100)?;
-    let mut engine = PcmEngine::new(
-        DECODE_BUFFER_SAMPLES,
-        channels,
-        None,
-        Some(Box::new(writer)),
-    );
-    let mut decoder = Atrac1Decoder::new(Box::new(input));
-
-    let mut processed = 0_u64;
-    while total_samples > processed {
-        match engine.apply_process(atracdenc_core::at1::data::NUM_SAMPLES, &mut decoder) {
-            Ok(p) => processed = p,
-            Err(err) => return Err(err.into()),
-        }
+    let codec = opts.encode.unwrap_or(Codec::Atrac1);
+    let mut builder = atracdenc::DecodeBuilder::new().codec(codec.into());
+    if let Some(input) = opts.input {
+        builder = builder.input_path(input);
+    }
+    if let Some(output) = opts.output {
+        builder = builder.output_path(output);
+    }
+    if let Some(container) = opts.container {
+        builder = builder.container(container.into());
     }
 
+    builder.run()?;
     Ok(())
 }
 
-fn build_encoder(
-    opts: &CliOptions,
-    codec: Codec,
-    container: Container,
-    channels: usize,
-    sample_rate: u32,
-    frame_count: u32,
-) -> Result<Box<dyn Processor>, Box<dyn Error>> {
-    match codec {
-        Codec::Atrac1 => {
-            let output = build_atrac1_output(opts, container, channels, frame_count)?;
-            let settings = At1EncodeSettings {
-                bfu_idx_const: opts.bfu_idx_const,
-                window_mode: if opts.no_transient.is_some() {
-                    WindowMode::NoTransient
-                } else {
-                    WindowMode::Auto
-                },
-                window_mask: opts.no_transient.unwrap_or(0),
-            };
-            Ok(Box::new(Atrac1Encoder::new(output, settings)))
-        }
-        Codec::Atrac3 | Codec::Atrac3Lp4 => {
-            let bitrate = match (codec, opts.bitrate) {
-                (Codec::Atrac3Lp4, None) => LP4.bitrate,
-                (_, bitrate) => bitrate.unwrap_or(0) * 1024,
-            };
-            let mut settings = At3EncodeSettings::new(
-                bitrate,
-                opts.no_gain_control,
-                opts.no_tonal_components,
-                channels as u8,
-                opts.bfu_idx_const,
-            )
-            .ok_or_else(|| invalid_input("unsupported ATRAC3 bitrate"))?;
-            settings.bfu_alloc_mode = match opts.at3_bfu_mode {
-                At3BfuMode::Fast => CoreBfuAllocMode::Fast,
-                At3BfuMode::Parity => CoreBfuAllocMode::Parity,
-            };
-            let output = build_atrac3_output(
-                opts,
-                container,
-                channels,
-                sample_rate,
-                frame_count,
-                settings,
-            )?;
-            let yaml_log = opts
-                .yaml_log
-                .as_ref()
-                .map(|path| {
-                    File::create(path)
-                        .map(|file| Box::new(BufWriter::new(file)) as Box<dyn std::io::Write>)
-                })
-                .transpose()?;
-            Ok(Box::new(Atrac3Encoder::with_yaml_log(
-                output, settings, yaml_log,
-            )))
-        }
-        Codec::Atrac3plus => unreachable!("ATRAC3plus is rejected before encoder construction"),
-    }
-}
-
-fn build_atrac1_output(
-    opts: &CliOptions,
-    container: Container,
-    channels: usize,
-    frame_count: u32,
-) -> Result<Box<dyn CompressedOutput>, Box<dyn Error>> {
-    let output = opts.output.as_ref().expect("output validated");
-    let file = BufWriter::new(File::create(output)?);
-    match container {
-        Container::Aea => Ok(Box::new(AeaOutput::new(
-            file,
-            "atracdenc-rust",
-            channels,
-            frame_count,
-        )?)),
-        Container::Raw => Ok(Box::new(RawOutput::new(
-            file,
-            channels,
-            Some(AEA_FRAME_SIZE),
-        ))),
-        _ => unreachable!("ATRAC1 container validity checked earlier"),
-    }
-}
-
-fn build_atrac3_output(
-    opts: &CliOptions,
-    container: Container,
-    channels: usize,
-    sample_rate: u32,
-    frame_count: u32,
-    settings: At3EncodeSettings,
-) -> Result<Box<dyn CompressedOutput>, Box<dyn Error>> {
-    let output = opts.output.as_ref().expect("output validated");
-    let file = BufWriter::new(File::create(output)?);
-    let params = settings.container_params;
-    match container {
-        Container::Oma => {
-            let channel_format = if params.joint_stereo {
-                OmaChannelFormat::StereoJoint
-            } else {
-                OmaChannelFormat::Stereo
-            };
-            Ok(Box::new(OmaOutput::new(
-                file,
-                OmaCodec::Atrac3,
-                sample_rate,
-                channel_format,
-                params.frame_sz as u32,
-            )?))
-        }
-        Container::Riff => Ok(Box::new(At3Output::atrac3(
-            file,
-            2,
-            frame_count,
-            params.frame_sz as u32,
-            params.joint_stereo,
-        )?)),
-        Container::Rm => Ok(Box::new(RmOutput::new(
-            file,
-            channels,
-            frame_count,
-            params.frame_sz as u32,
-            params.joint_stereo,
-        )?)),
-        Container::Raw => Ok(Box::new(RawOutput::new(
-            file,
-            channels,
-            Some(params.frame_sz as usize),
-        ))),
-        _ => unreachable!("ATRAC3 container validity checked earlier"),
-    }
-}
-
-fn validate_encode_flags(opts: &CliOptions, codec: Codec) -> Result<(), io::Error> {
-    if opts.decode {
-        return Err(invalid_input(
-            "--decode cannot be combined with encode mode",
-        ));
-    }
-    if codec != Codec::Atrac1 && opts.no_transient.is_some() {
-        return Err(invalid_input("--notransient is only supported for atrac1"));
-    }
-    if codec == Codec::Atrac1 && opts.yaml_log.is_some() {
-        return Err(invalid_input("--yaml-log is only supported for ATRAC3"));
-    }
-    if codec == Codec::Atrac1 && (opts.no_gain_control || opts.no_tonal_components) {
-        return Err(invalid_input(
-            "--nogaincontrol and --notonal are only supported for atrac3",
-        ));
-    }
-    if codec != Codec::Atrac3 && codec != Codec::Atrac3Lp4 && opts.bitrate.is_some() {
-        return Err(invalid_input("--bitrate is only supported for atrac3"));
-    }
-    if let Some(bitrate) = opts.bitrate
-        && !(32..=384).contains(&bitrate)
-    {
-        return Err(invalid_input("--bitrate must be in the range 32..384"));
-    }
-    if codec == Codec::Atrac1 && opts.bfu_idx_const > 8 {
-        return Err(invalid_input(
-            "--bfuidxconst must be in the range 0..8 for atrac1",
-        ));
-    }
-    if matches!(codec, Codec::Atrac3 | Codec::Atrac3Lp4)
-        && opts.bfu_idx_fast
-        && opts.at3_bfu_mode == At3BfuMode::Parity
-    {
-        return Err(invalid_input(
-            "--bfuidxfast cannot be combined with --at3-bfu-mode parity",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_container(codec: Codec, container: Container) -> Result<(), io::Error> {
-    let supported = match codec {
-        Codec::Atrac1 => matches!(container, Container::Aea | Container::Raw),
-        Codec::Atrac3 | Codec::Atrac3Lp4 => {
-            matches!(
-                container,
-                Container::Oma | Container::Riff | Container::Rm | Container::Raw
-            )
-        }
-        Codec::Atrac3plus => matches!(container, Container::Oma | Container::Riff | Container::Raw),
-    };
-
-    if supported {
-        Ok(())
-    } else {
-        Err(invalid_input(format!(
-            "container {} is not supported for {}",
-            container_name(container),
-            codec_name(codec)
-        )))
-    }
-}
-
-fn infer_container(output: &Path, codec: Codec) -> Container {
-    let ext = output
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    match ext.as_str() {
-        "aea" => Container::Aea,
-        "oma" | "omg" => Container::Oma,
-        "at3" | "wav" => Container::Riff,
-        "rm" | "ra" => Container::Rm,
-        "raw" | "dat" => Container::Raw,
-        _ => match codec {
-            Codec::Atrac1 => Container::Aea,
-            Codec::Atrac3 | Codec::Atrac3Lp4 | Codec::Atrac3plus => Container::Oma,
-        },
-    }
-}
-
-fn encoded_frame_count(total_samples: u64, codec: Codec) -> Result<u32, io::Error> {
-    let frames = total_samples.div_ceil(frame_samples(codec) as u64);
-    u32::try_from(frames).map_err(|_| invalid_input("input is too long for container metadata"))
-}
-
-fn frame_samples(codec: Codec) -> usize {
-    match codec {
-        Codec::Atrac1 => atracdenc_core::at1::data::NUM_SAMPLES,
-        Codec::Atrac3 | Codec::Atrac3Lp4 => atracdenc_core::at3::data::NUM_SAMPLES,
-        Codec::Atrac3plus => 2048,
-    }
-}
-
-fn codec_name(codec: Codec) -> &'static str {
-    match codec {
-        Codec::Atrac1 => "atrac1",
-        Codec::Atrac3 => "atrac3",
-        Codec::Atrac3Lp4 => "atrac3_lp4",
-        Codec::Atrac3plus => "atrac3plus",
-    }
-}
-
-fn container_name(container: Container) -> &'static str {
-    match container {
-        Container::Aea => "aea",
-        Container::Oma => "oma",
-        Container::Riff => "riff",
-        Container::Rm => "rm",
-        Container::Raw => "raw",
-    }
-}
-
-fn invalid_input(message: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message.into())
+fn invalid_input(message: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, message.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn parses_original_style_atrac3_flags() {
@@ -558,58 +259,30 @@ mod tests {
     }
 
     #[test]
-    fn infers_containers_from_extension() {
+    fn facade_infers_containers_from_extension() {
         assert_eq!(
-            Container::Aea,
-            infer_container(Path::new("music.aea"), Codec::Atrac1)
+            atracdenc::Container::Aea,
+            atracdenc::infer_container(Path::new("music.aea"), atracdenc::Codec::Atrac1)
         );
         assert_eq!(
-            Container::Oma,
-            infer_container(Path::new("music.omg"), Codec::Atrac3)
+            atracdenc::Container::Oma,
+            atracdenc::infer_container(Path::new("music.omg"), atracdenc::Codec::Atrac3)
         );
         assert_eq!(
-            Container::Riff,
-            infer_container(Path::new("music.at3"), Codec::Atrac3)
+            atracdenc::Container::Riff,
+            atracdenc::infer_container(Path::new("music.at3"), atracdenc::Codec::Atrac3)
         );
         assert_eq!(
-            Container::Rm,
-            infer_container(Path::new("music.rm"), Codec::Atrac3)
+            atracdenc::Container::Rm,
+            atracdenc::infer_container(Path::new("music.rm"), atracdenc::Codec::Atrac3)
         );
         assert_eq!(
-            Container::Oma,
-            infer_container(Path::new("music.bin"), Codec::Atrac3)
+            atracdenc::Container::Oma,
+            atracdenc::infer_container(Path::new("music.bin"), atracdenc::Codec::Atrac3)
         );
         assert_eq!(
-            Container::Raw,
-            infer_container(Path::new("music.dat"), Codec::Atrac3)
-        );
-    }
-
-    #[test]
-    fn validates_atrac1_bfu_idx_const_range() {
-        let opts = CliOptions {
-            encode: Some(Codec::Atrac1),
-            decode: false,
-            input: None,
-            output: None,
-            container: None,
-            bitrate: None,
-            bfu_idx_const: 9,
-            bfu_idx_fast: false,
-            at3_bfu_mode: At3BfuMode::Fast,
-            no_transient: None,
-            no_stdout: true,
-            no_tonal_components: false,
-            no_gain_control: false,
-            yaml_log: None,
-            mono: false,
-        };
-
-        assert_eq!(
-            "--bfuidxconst must be in the range 0..8 for atrac1",
-            validate_encode_flags(&opts, Codec::Atrac1)
-                .unwrap_err()
-                .to_string()
+            atracdenc::Container::Raw,
+            atracdenc::infer_container(Path::new("music.dat"), atracdenc::Codec::Atrac3)
         );
     }
 
@@ -621,38 +294,44 @@ mod tests {
 
     #[test]
     fn rejects_conflicting_at3_bfu_mode_flags() {
-        let cli = Cli::try_parse_from([
-            "atracdenc",
-            "-e",
-            "atrac3",
-            "--bfuidxfast",
-            "--at3-bfu-mode",
-            "parity",
-        ])
-        .unwrap();
-
+        let err = atracdenc::EncodeBuilder::new()
+            .codec(atracdenc::Codec::Atrac3)
+            .at3_settings(At3Settings {
+                bfu_idx_fast: true,
+                bfu_mode: atracdenc::At3BfuMode::Parity,
+                ..At3Settings::default()
+            })
+            .run_to_vec()
+            .unwrap_err();
         assert_eq!(
-            "--bfuidxfast cannot be combined with --at3-bfu-mode parity",
-            validate_encode_flags(&cli.opts, Codec::Atrac3)
-                .unwrap_err()
-                .to_string()
+            "invalid input: --bfuidxfast cannot be combined with --at3-bfu-mode parity",
+            err.to_string()
         );
     }
 
     #[test]
-    fn validates_codec_container_matrix() {
-        assert!(validate_container(Codec::Atrac1, Container::Aea).is_ok());
-        assert!(validate_container(Codec::Atrac1, Container::Raw).is_ok());
-        assert!(validate_container(Codec::Atrac3, Container::Rm).is_ok());
+    fn facade_validates_codec_container_matrix() {
+        assert!(
+            atracdenc::validate_container(atracdenc::Codec::Atrac1, atracdenc::Container::Aea)
+                .is_ok()
+        );
+        assert!(
+            atracdenc::validate_container(atracdenc::Codec::Atrac1, atracdenc::Container::Raw)
+                .is_ok()
+        );
+        assert!(
+            atracdenc::validate_container(atracdenc::Codec::Atrac3, atracdenc::Container::Rm)
+                .is_ok()
+        );
         assert_eq!(
-            "container oma is not supported for atrac1",
-            validate_container(Codec::Atrac1, Container::Oma)
+            "invalid input: container oma is not supported for atrac1",
+            atracdenc::validate_container(atracdenc::Codec::Atrac1, atracdenc::Container::Oma)
                 .unwrap_err()
                 .to_string()
         );
         assert_eq!(
-            "container rm is not supported for atrac3plus",
-            validate_container(Codec::Atrac3plus, Container::Rm)
+            "invalid input: container rm is not supported for atrac3plus",
+            atracdenc::validate_container(atracdenc::Codec::Atrac3plus, atracdenc::Container::Rm)
                 .unwrap_err()
                 .to_string()
         );

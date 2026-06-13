@@ -37,7 +37,7 @@ Virtual workspace with two crates:
 | `atracdenc-cli` | `crates/atracdenc-cli/` | Binary `atracdenc` wrapping core via clap |
 
 Top-level module map of core (`lib.rs`):
-`at1` `at3` `atrac` `bitstream` `container` `dsp` `pcm` `util`
+`at1` `at3` `atrac` `bitstream` `container` `dsp` `error` `pcm` `util`
 
 Shared psychoacoustics live in `atrac/` (psy, scale). Codec-specific code in `at1/` and `at3/`.
 Containers (AEA, OMA, RIFF/WAV, RealMedia, Raw) in `container/`.
@@ -62,6 +62,11 @@ generate synthetic WAVs in temp dirs — no committed test fixtures needed.
 Cross-encoder validation against the C++ `atracdenc` reference binary uses
 `docs/bench.sh` (requires hyperfine, ffmpeg, and a C++ atracdenc build).
 `docs/compute_snr.py` computes PCM SNR between two WAVs.
+
+Additional analysis notes in `docs/`:
+`cpp-rust-parity-audit.md`, `decode-profiling.md`, `precision-analysis.md`,
+`speed-snr-comparison.md`. Consult these when investigating encoder parity or
+performance issues.
 
 ## Profiling
 

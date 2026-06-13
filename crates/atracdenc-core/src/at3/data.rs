@@ -694,16 +694,11 @@ impl Default for GainEnergyScale {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub enum BfuAllocMode {
+    #[default]
     Fast,
     Parity,
-}
-
-impl Default for BfuAllocMode {
-    fn default() -> Self {
-        Self::Fast
-    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

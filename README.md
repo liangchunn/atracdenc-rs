@@ -12,8 +12,12 @@ Rust.
 
 | Crate | Type | Description |
 |---|---|---|
+| [`atracdenc`](crates/atracdenc/) | Library | High-level facade: builders, validation, container inference |
 | [`atracdenc-core`](crates/atracdenc-core/) | Library | ATRAC1 and ATRAC3 encode/decode engine |
 | [`atracdenc-cli`](crates/atracdenc-cli/) | Binary | CLI frontend (produces the `atracdenc` binary) |
+
+See [`crates/atracdenc/README.md`](crates/atracdenc/README.md) for library API
+examples covering ATRAC1, ATRAC3 LP2, and ATRAC3 LP4 usage.
 
 The workspace is a virtual manifest — build the CLI to get the binary:
 

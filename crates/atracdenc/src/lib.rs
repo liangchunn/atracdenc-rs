@@ -1,8 +1,6 @@
 use std::{
     cell::RefCell,
-    fs::File,
-    io::{self, BufWriter, Cursor, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
+    io::{self, Cursor, Read, Seek, SeekFrom, Write},
     rc::Rc,
 };
 
@@ -47,6 +45,14 @@ impl From<ContainerError> for Error {
         Error::Core(AtracdencError::from(value))
     }
 }
+
+trait ReadSeek: Read + Seek {}
+
+impl<T: Read + Seek> ReadSeek for T {}
+
+trait WriteSeek: Write + Seek {}
+
+impl<T: Write + Seek> WriteSeek for T {}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Codec {
@@ -127,17 +133,21 @@ impl Default for At3Settings {
 }
 
 pub struct EncodeBuilder {
-    input: Option<PathBuf>,
+    input: Option<EncodeInput>,
     output: Option<EncodeOutput>,
     codec: Codec,
     container: Option<Container>,
     at1: At1Settings,
     at3: At3Settings,
-    yaml_log: Option<PathBuf>,
+    yaml_log: Option<Box<dyn Write>>,
+}
+
+enum EncodeInput {
+    Reader(Box<dyn Read>),
 }
 
 enum EncodeOutput {
-    Path(PathBuf),
+    Writer(Box<dyn WriteSeek>),
     Vec,
 }
 
@@ -160,13 +170,17 @@ impl EncodeBuilder {
         }
     }
 
-    pub fn input_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.input = Some(path.into());
+    pub fn input_reader<R: Read + 'static>(mut self, reader: R) -> Self {
+        self.input = Some(EncodeInput::Reader(Box::new(reader)));
         self
     }
 
-    pub fn output_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.output = Some(EncodeOutput::Path(path.into()));
+    pub fn input_bytes(self, bytes: impl Into<Vec<u8>>) -> Self {
+        self.input_reader(Cursor::new(bytes.into()))
+    }
+
+    pub fn output_writer<W: Write + Seek + 'static>(mut self, writer: W) -> Self {
+        self.output = Some(EncodeOutput::Writer(Box::new(writer)));
         self
     }
 
@@ -190,15 +204,12 @@ impl EncodeBuilder {
         self
     }
 
-    pub fn yaml_log_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.yaml_log = Some(path.into());
+    pub fn yaml_log_writer<W: Write + 'static>(mut self, writer: W) -> Self {
+        self.yaml_log = Some(Box::new(writer));
         self
     }
 
-    pub fn run(mut self) -> Result<()> {
-        if self.output.is_none() {
-            self.output = Some(EncodeOutput::Path(missing_output_path()?));
-        }
+    pub fn run(self) -> Result<()> {
         encode(self).map(|_| ())
     }
 
@@ -206,16 +217,25 @@ impl EncodeBuilder {
         self.output = Some(EncodeOutput::Vec);
         encode(self).and_then(|output| match output {
             EncodedOutput::Vec(bytes) => Ok(bytes),
-            EncodedOutput::File => Err(invalid_input("internal error: expected byte output")),
+            EncodedOutput::Sink => Err(invalid_input("internal error: expected byte output")),
         })
     }
 }
 
 pub struct DecodeBuilder {
-    input: Option<PathBuf>,
-    output: Option<PathBuf>,
+    input: Option<DecodeInput>,
+    output: Option<DecodeOutput>,
     codec: Codec,
     container: Option<Container>,
+}
+
+enum DecodeInput {
+    Reader(Box<dyn ReadSeek>),
+}
+
+enum DecodeOutput {
+    Writer(Box<dyn WriteSeek>),
+    Vec,
 }
 
 impl Default for DecodeBuilder {
@@ -234,13 +254,17 @@ impl DecodeBuilder {
         }
     }
 
-    pub fn input_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.input = Some(path.into());
+    pub fn input_reader<R: Read + Seek + 'static>(mut self, reader: R) -> Self {
+        self.input = Some(DecodeInput::Reader(Box::new(reader)));
         self
     }
 
-    pub fn output_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.output = Some(path.into());
+    pub fn input_bytes(self, bytes: impl Into<Vec<u8>>) -> Self {
+        self.input_reader(Cursor::new(bytes.into()))
+    }
+
+    pub fn output_writer<W: Write + Seek + 'static>(mut self, writer: W) -> Self {
+        self.output = Some(DecodeOutput::Writer(Box::new(writer)));
         self
     }
 
@@ -255,38 +279,48 @@ impl DecodeBuilder {
     }
 
     pub fn run(self) -> Result<()> {
-        decode(self)
+        decode(self).map(|_| ())
+    }
+
+    pub fn run_to_vec(mut self) -> Result<Vec<u8>> {
+        self.output = Some(DecodeOutput::Vec);
+        decode(self).and_then(|output| match output {
+            DecodedOutput::Vec(bytes) => Ok(bytes),
+            DecodedOutput::Sink => Err(invalid_input("internal error: expected byte output")),
+        })
     }
 }
 
 enum EncodedOutput {
-    File,
+    Sink,
     Vec(Vec<u8>),
 }
 
-fn encode(builder: EncodeBuilder) -> Result<EncodedOutput> {
+enum DecodedOutput {
+    Sink,
+    Vec(Vec<u8>),
+}
+
+fn encode(mut builder: EncodeBuilder) -> Result<EncodedOutput> {
     validate_encode_settings(&builder)?;
     let input = builder
         .input
-        .as_ref()
+        .take()
         .ok_or_else(|| invalid_input("missing input file"))?;
-    let reader = WavReader::open(input).map_err(|e| {
-        invalid_input(format!(
-            "unable to open input file {}: {e}",
-            input.display()
-        ))
-    })?;
+    let reader = open_wav_reader(input)?;
     let channels = usize::from(reader.channels());
     let sample_rate = reader.sample_rate();
 
     validate_wav(&reader)?;
     let frame_count = encoded_frame_count(reader.total_samples(), builder.codec)?;
 
-    let container = match (builder.container, &builder.output) {
+    let output = builder
+        .output
+        .take()
+        .ok_or_else(|| invalid_input("missing output file"))?;
+    let container = match (builder.container, &output) {
         (Some(container), _) => container,
-        (None, Some(EncodeOutput::Path(path))) => infer_container(path, builder.codec),
-        (None, Some(EncodeOutput::Vec)) => default_container(builder.codec),
-        (None, None) => return Err(invalid_input("missing output file")),
+        (None, EncodeOutput::Writer(_) | EncodeOutput::Vec) => default_container(builder.codec),
     };
     validate_container(builder.codec, container)?;
     if builder.codec == Codec::Atrac3plus {
@@ -294,20 +328,20 @@ fn encode(builder: EncodeBuilder) -> Result<EncodedOutput> {
     }
 
     let mut vec_output = None;
-    let mut processor = match builder.output.as_ref() {
-        Some(EncodeOutput::Path(path)) => build_file_encoder(
-            &builder,
-            path,
+    let mut processor = match output {
+        EncodeOutput::Writer(writer) => build_seek_encoder(
+            &mut builder,
+            writer,
             container,
             channels,
             sample_rate,
             frame_count,
         )?,
-        Some(EncodeOutput::Vec) => {
+        EncodeOutput::Vec => {
             let shared = SharedCursor::default();
             vec_output = Some(shared.clone());
-            build_vec_encoder(
-                &builder,
+            build_seek_encoder(
+                &mut builder,
                 shared,
                 container,
                 channels,
@@ -315,7 +349,6 @@ fn encode(builder: EncodeBuilder) -> Result<EncodedOutput> {
                 frame_count,
             )?
         }
-        None => return Err(invalid_input("missing output file")),
     };
     let mut engine = PcmEngine::new(
         frame_samples(builder.codec),
@@ -336,11 +369,11 @@ fn encode(builder: EncodeBuilder) -> Result<EncodedOutput> {
     if let Some(output) = vec_output {
         Ok(EncodedOutput::Vec(output.into_bytes()))
     } else {
-        Ok(EncodedOutput::File)
+        Ok(EncodedOutput::Sink)
     }
 }
 
-fn decode(builder: DecodeBuilder) -> Result<()> {
+fn decode(mut builder: DecodeBuilder) -> Result<DecodedOutput> {
     if builder.codec != Codec::Atrac1 {
         return Err(invalid_input("decode is only supported for atrac1"));
     }
@@ -351,32 +384,35 @@ fn decode(builder: DecodeBuilder) -> Result<()> {
         return Err(invalid_input("decode is only supported from AEA input"));
     }
 
-    let input_path = builder
+    let input = builder
         .input
-        .as_ref()
+        .take()
         .ok_or_else(|| invalid_input("missing input file"))?;
-    let output_path = builder
+    let output = builder
         .output
-        .as_ref()
+        .take()
         .ok_or_else(|| invalid_input("missing output file"))?;
-    let input_file = File::open(input_path).map_err(|e| {
-        invalid_input(format!(
-            "unable to open input file {}: {e}",
-            input_path.display()
-        ))
-    })?;
-    let input = AeaInput::new(input_file)?;
+    let input = open_aea_input(input)?;
     let channels = input.channels().max(1);
     const DECODE_BUFFER_SAMPLES: usize = 4096;
     let total_samples = input.length_in_samples();
-    let writer = WavWriter::create(output_path, channels as u16, 44_100)
-        .map_err(|e| invalid_input(e.to_string()))?;
-    let mut engine = PcmEngine::new(
-        DECODE_BUFFER_SAMPLES,
-        channels,
-        None,
-        Some(Box::new(writer)),
-    );
+
+    let mut vec_output = None;
+    let writer: Box<dyn atracdenc_core::pcm::engine::PcmWriter> = match output {
+        DecodeOutput::Writer(writer) => Box::new(
+            WavWriter::new(writer, channels as u16, 44_100)
+                .map_err(|e| invalid_input(e.to_string()))?,
+        ),
+        DecodeOutput::Vec => {
+            let shared = SharedCursor::default();
+            vec_output = Some(shared.clone());
+            Box::new(
+                WavWriter::new(shared, channels as u16, 44_100)
+                    .map_err(|e| invalid_input(e.to_string()))?,
+            )
+        }
+    };
+    let mut engine = PcmEngine::new(DECODE_BUFFER_SAMPLES, channels, None, Some(writer));
     let mut decoder = Atrac1Decoder::new(Box::new(input));
 
     let mut processed = 0_u64;
@@ -387,50 +423,39 @@ fn decode(builder: DecodeBuilder) -> Result<()> {
         }
     }
 
-    Ok(())
-}
+    drop(engine);
 
-fn build_file_encoder(
-    builder: &EncodeBuilder,
-    output: &Path,
-    container: Container,
-    channels: usize,
-    sample_rate: u32,
-    frame_count: u32,
-) -> Result<Box<dyn Processor>> {
-    match builder.codec {
-        Codec::Atrac1 => {
-            let file = BufWriter::new(File::create(output)?);
-            build_atrac1_encoder(
-                builder,
-                build_atrac1_output(file, container, channels, frame_count)?,
-            )
-        }
-        Codec::Atrac3 | Codec::Atrac3Lp4 => {
-            let settings = build_atrac3_settings(builder, channels)?;
-            let file = BufWriter::new(File::create(output)?);
-            let output = build_atrac3_output(
-                file,
-                container,
-                channels,
-                sample_rate,
-                frame_count,
-                settings,
-            )?;
-            build_atrac3_encoder(builder, output, settings)
-        }
-        Codec::Atrac3plus => unreachable!("ATRAC3plus is rejected before encoder construction"),
+    if let Some(output) = vec_output {
+        Ok(DecodedOutput::Vec(output.into_bytes()))
+    } else {
+        Ok(DecodedOutput::Sink)
     }
 }
 
-fn build_vec_encoder(
-    builder: &EncodeBuilder,
-    output: SharedCursor,
+fn open_wav_reader(input: EncodeInput) -> Result<WavReader<Box<dyn Read>>> {
+    match input {
+        EncodeInput::Reader(reader) => WavReader::new(reader)
+            .map_err(|e| invalid_input(format!("unable to read WAV input: {e}"))),
+    }
+}
+
+fn open_aea_input(input: DecodeInput) -> Result<AeaInput<Box<dyn ReadSeek>>> {
+    match input {
+        DecodeInput::Reader(reader) => Ok(AeaInput::new(reader)?),
+    }
+}
+
+fn build_seek_encoder<W>(
+    builder: &mut EncodeBuilder,
+    output: W,
     container: Container,
     channels: usize,
     sample_rate: u32,
     frame_count: u32,
-) -> Result<Box<dyn Processor>> {
+) -> Result<Box<dyn Processor>>
+where
+    W: Write + Seek + 'static,
+{
     match builder.codec {
         Codec::Atrac1 => build_atrac1_encoder(
             builder,
@@ -446,7 +471,7 @@ fn build_vec_encoder(
                 frame_count,
                 settings,
             )?;
-            build_atrac3_encoder(builder, output, settings)
+            build_atrac3_encoder(output, settings, builder.yaml_log.take())
         }
         Codec::Atrac3plus => unreachable!("ATRAC3plus is rejected before encoder construction"),
     }
@@ -469,15 +494,10 @@ fn build_atrac1_encoder(
 }
 
 fn build_atrac3_encoder(
-    builder: &EncodeBuilder,
     output: Box<dyn CompressedOutput>,
     settings: CoreAt3Settings,
+    yaml_log: Option<Box<dyn Write>>,
 ) -> Result<Box<dyn Processor>> {
-    let yaml_log = builder
-        .yaml_log
-        .as_ref()
-        .map(|path| File::create(path).map(|file| Box::new(BufWriter::new(file)) as Box<dyn Write>))
-        .transpose()?;
     Ok(Box::new(Atrac3Encoder::with_yaml_log(
         output, settings, yaml_log,
     )))
@@ -618,7 +638,7 @@ fn validate_encode_settings(builder: &EncodeBuilder) -> Result<()> {
     Ok(())
 }
 
-fn validate_wav(reader: &WavReader) -> Result<()> {
+fn validate_wav<R: Read>(reader: &WavReader<R>) -> Result<()> {
     let channels = reader.channels();
     if channels == 0 || channels > 2 {
         return Err(invalid_input(
@@ -658,22 +678,6 @@ pub fn validate_container(codec: Codec, container: Container) -> Result<()> {
             container_name(container),
             codec_name(codec)
         )))
-    }
-}
-
-pub fn infer_container(output: &Path, codec: Codec) -> Container {
-    let ext = output
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    match ext.as_str() {
-        "aea" => Container::Aea,
-        "oma" | "omg" => Container::Oma,
-        "at3" | "wav" => Container::Riff,
-        "rm" | "ra" => Container::Rm,
-        "raw" | "dat" => Container::Raw,
-        _ => default_container(codec),
     }
 }
 
@@ -720,10 +724,6 @@ fn invalid_input(message: impl Into<String>) -> Error {
     Error::InvalidInput(message.into())
 }
 
-fn missing_output_path() -> Result<PathBuf> {
-    Err(invalid_input("missing output file"))
-}
-
 #[derive(Clone, Default)]
 struct SharedCursor {
     inner: Rc<RefCell<Cursor<Vec<u8>>>>,
@@ -754,25 +754,8 @@ impl Seek for SharedCursor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
 
-    fn tempdir(test_name: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "atracdenc-api-{test_name}-{}-{nanos}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&path).unwrap();
-        path
-    }
-
-    fn write_wav(path: &Path, frames: usize) {
+    fn wav_bytes(frames: usize) -> Vec<u8> {
         let mut bytes = Vec::new();
         let data_len = frames as u32 * 2;
         bytes.extend_from_slice(b"RIFF");
@@ -792,35 +775,7 @@ mod tests {
             let sample = (phase.sin() * 8000.0) as i16;
             bytes.extend_from_slice(&sample.to_le_bytes());
         }
-        fs::write(path, bytes).unwrap();
-    }
-
-    #[test]
-    fn infers_containers_from_extension() {
-        assert_eq!(
-            Container::Aea,
-            infer_container(Path::new("music.aea"), Codec::Atrac1)
-        );
-        assert_eq!(
-            Container::Oma,
-            infer_container(Path::new("music.omg"), Codec::Atrac3)
-        );
-        assert_eq!(
-            Container::Riff,
-            infer_container(Path::new("music.at3"), Codec::Atrac3)
-        );
-        assert_eq!(
-            Container::Rm,
-            infer_container(Path::new("music.rm"), Codec::Atrac3)
-        );
-        assert_eq!(
-            Container::Oma,
-            infer_container(Path::new("music.bin"), Codec::Atrac3)
-        );
-        assert_eq!(
-            Container::Raw,
-            infer_container(Path::new("music.dat"), Codec::Atrac3)
-        );
+        bytes
     }
 
     #[test]
@@ -838,11 +793,8 @@ mod tests {
 
     #[test]
     fn rejects_invalid_atrac1_bfu_idx_const() {
-        let dir = tempdir("invalid-at1-bfu");
-        let input = dir.join("in.wav");
-        write_wav(&input, 1024);
         let err = EncodeBuilder::new()
-            .input_path(&input)
+            .input_bytes(wav_bytes(1024))
             .container(Container::Aea)
             .at1_settings(At1Settings {
                 bfu_idx_const: 9,
@@ -854,32 +806,51 @@ mod tests {
             "invalid input: bfu_idx_const must be in the range 0..=8 for atrac1",
             err.to_string()
         );
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn encodes_atrac1_to_vec() {
-        let dir = tempdir("at1-to-vec");
-        let input = dir.join("in.wav");
-        write_wav(&input, 8192);
+    fn encodes_atrac1_from_bytes_to_vec() {
         let bytes = EncodeBuilder::new()
-            .input_path(&input)
+            .input_bytes(wav_bytes(8192))
             .codec(Codec::Atrac1)
             .container(Container::Aea)
             .run_to_vec()
             .unwrap();
         assert_eq!(&[0x00, 0x08, 0x00, 0x00], &bytes[..4]);
         assert!(bytes.len() > AEA_FRAME_SIZE);
-        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn encodes_atrac1_from_reader_to_vec() {
+        let bytes = EncodeBuilder::new()
+            .input_reader(Cursor::new(wav_bytes(8192)))
+            .codec(Codec::Atrac1)
+            .container(Container::Aea)
+            .run_to_vec()
+            .unwrap();
+        assert_eq!(&[0x00, 0x08, 0x00, 0x00], &bytes[..4]);
+        assert!(bytes.len() > AEA_FRAME_SIZE);
+    }
+
+    #[test]
+    fn encodes_atrac1_to_writer_with_default_container() {
+        let output = SharedCursor::default();
+        EncodeBuilder::new()
+            .input_bytes(wav_bytes(8192))
+            .codec(Codec::Atrac1)
+            .output_writer(output.clone())
+            .run()
+            .unwrap();
+
+        let bytes = output.into_bytes();
+        assert_eq!(&[0x00, 0x08, 0x00, 0x00], &bytes[..4]);
+        assert!(bytes.len() > AEA_FRAME_SIZE);
     }
 
     #[test]
     fn encodes_atrac3_to_vec() {
-        let dir = tempdir("at3-to-vec");
-        let input = dir.join("in.wav");
-        write_wav(&input, 2048);
         let bytes = EncodeBuilder::new()
-            .input_path(&input)
+            .input_bytes(wav_bytes(2048))
             .codec(Codec::Atrac3)
             .container(Container::Oma)
             .at3_settings(At3Settings {
@@ -890,31 +861,51 @@ mod tests {
             .unwrap();
         assert_eq!(b"EA3", &bytes[..3]);
         assert!(bytes.len() > 96);
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn invalid_atrac3_settings_do_not_truncate_existing_output() {
-        let dir = tempdir("invalid-at3-keeps-output");
-        let input = dir.join("in.wav");
-        let output = dir.join("existing.oma");
-        let original = b"existing output bytes";
-        write_wav(&input, 2048);
-        fs::write(&output, original).unwrap();
-
-        let err = EncodeBuilder::new()
-            .input_path(&input)
-            .output_path(&output)
+    fn encodes_atrac3_to_vec_with_default_container() {
+        let bytes = EncodeBuilder::new()
+            .input_bytes(wav_bytes(2048))
             .codec(Codec::Atrac3)
             .at3_settings(At3Settings {
-                bitrate_kbps: Some(384),
+                no_tonal_components: true,
                 ..At3Settings::default()
             })
+            .run_to_vec()
+            .unwrap();
+        assert_eq!(b"EA3", &bytes[..3]);
+        assert!(bytes.len() > 96);
+    }
+
+    #[test]
+    fn decodes_atrac1_from_bytes_to_wav_vec() {
+        let encoded = EncodeBuilder::new()
+            .input_bytes(wav_bytes(8192))
+            .codec(Codec::Atrac1)
+            .container(Container::Aea)
+            .run_to_vec()
+            .unwrap();
+
+        let decoded = DecodeBuilder::new()
+            .codec(Codec::Atrac1)
+            .input_bytes(encoded)
+            .run_to_vec()
+            .unwrap();
+
+        assert_eq!(b"RIFF", &decoded[..4]);
+        assert_eq!(b"WAVE", &decoded[8..12]);
+    }
+
+    #[test]
+    fn run_requires_explicit_writer_output() {
+        let err = EncodeBuilder::new()
+            .input_bytes(wav_bytes(8192))
+            .codec(Codec::Atrac1)
+            .container(Container::Aea)
             .run()
             .unwrap_err();
 
-        assert_eq!("invalid input: unsupported ATRAC3 bitrate", err.to_string());
-        assert_eq!(original.as_slice(), fs::read(&output).unwrap());
-        let _ = fs::remove_dir_all(dir);
+        assert_eq!("invalid input: missing output file", err.to_string());
     }
 }

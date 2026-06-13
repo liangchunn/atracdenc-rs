@@ -71,6 +71,30 @@ fn read_be_u32(bytes: &[u8]) -> u32 {
     u32::from_be_bytes(bytes.try_into().unwrap())
 }
 
+fn assert_no_temp_for(path: &Path) {
+    let Some(dir) = path.parent() else {
+        return;
+    };
+    if !dir.exists() {
+        return;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("output");
+    let prefix = format!(".{file_name}.tmp-");
+    let leftovers: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(&prefix))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "left temp files for {}: {leftovers:?}",
+        path.display()
+    );
+}
+
 #[test]
 fn missing_input_reports_open_error_before_wav_validation() {
     let dir = tempdir("missing-input");
@@ -186,6 +210,87 @@ fn atrac3_rm_output_uses_computed_frame_count() {
 }
 
 #[test]
+fn atrac3_yaml_log_path_is_written() {
+    let dir = tempdir("yaml-log");
+    let input = dir.join("in.wav");
+    let out = dir.join("out.oma");
+    let yaml_log = dir.join("gain.yaml");
+    write_wav(&input, 4096);
+
+    assert_success(run(&[
+        "-e",
+        "atrac3",
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--yaml-log",
+        yaml_log.to_str().unwrap(),
+        "--notonal",
+        "--nostdout",
+    ]));
+    assert!(fs::metadata(out).unwrap().len() > 0);
+    assert!(fs::metadata(yaml_log).unwrap().len() > 0);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn atrac1_yaml_log_is_rejected_before_touching_bad_yaml_path() {
+    let dir = tempdir("at1-yaml-log-rejected");
+    let input = dir.join("in.wav");
+    let out = dir.join("out.aea");
+    let yaml_log = dir.join("missing").join("gain.yaml");
+    write_wav(&input, 8192);
+
+    let output = run(&[
+        "-e",
+        "atrac1",
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--yaml-log",
+        yaml_log.to_str().unwrap(),
+        "--nostdout",
+    ]);
+
+    assert!(!output.status.success());
+    assert!(combined_lower(&output).contains("yaml-log is only supported for atrac3 encode"));
+    assert!(!out.exists());
+    assert_no_temp_for(&out);
+    assert!(!yaml_log.parent().unwrap().exists());
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn atrac3_bad_yaml_log_path_does_not_create_output_temp() {
+    let dir = tempdir("bad-yaml-log");
+    let input = dir.join("in.wav");
+    let out = dir.join("out.oma");
+    let yaml_log = dir.join("missing").join("gain.yaml");
+    write_wav(&input, 4096);
+
+    let output = run(&[
+        "-e",
+        "atrac3",
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--yaml-log",
+        yaml_log.to_str().unwrap(),
+        "--notonal",
+        "--nostdout",
+    ]);
+
+    assert!(!output.status.success());
+    assert!(!out.exists());
+    assert_no_temp_for(&out);
+    assert!(!yaml_log.parent().unwrap().exists());
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn utf8_atrac1_output_and_decode_succeed() {
     let dir = tempdir("utf8-at1-decode");
     let input = dir.join("in.wav");
@@ -211,6 +316,33 @@ fn utf8_atrac1_output_and_decode_succeed() {
         "--nostdout",
     ]));
     assert!(fs::metadata(decoded).unwrap().len() > 0);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn invalid_encode_does_not_truncate_existing_output() {
+    let dir = tempdir("invalid-keeps-output");
+    let input = dir.join("in.wav");
+    let out = dir.join("existing.oma");
+    let original = b"existing output bytes";
+    write_wav(&input, 2048);
+    fs::write(&out, original).unwrap();
+
+    let output = run(&[
+        "-e",
+        "atrac3",
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--bitrate",
+        "384",
+        "--nostdout",
+    ]);
+
+    assert!(!output.status.success());
+    assert!(combined_lower(&output).contains("unsupported atrac3 bitrate"));
+    assert_eq!(original.as_slice(), fs::read(&out).unwrap());
     let _ = fs::remove_dir_all(dir);
 }
 

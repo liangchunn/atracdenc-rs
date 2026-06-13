@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{BufReader, BufWriter},
+    io::{self, BufReader, BufWriter},
     path::Path,
 };
 
@@ -10,14 +10,14 @@ use crate::{
     util::to_int,
 };
 
-pub struct WavReader {
-    inner: hound::WavReader<BufReader<File>>,
+pub struct WavReader<R: io::Read> {
+    inner: hound::WavReader<R>,
     spec: hound::WavSpec,
 }
 
-impl WavReader {
-    pub fn open(path: &Path) -> Result<Self, hound::Error> {
-        let inner = hound::WavReader::open(path)?;
+impl<R: io::Read> WavReader<R> {
+    pub fn new(reader: R) -> Result<Self, hound::Error> {
+        let inner = hound::WavReader::new(reader)?;
         let spec = inner.spec();
         Ok(Self { inner, spec })
     }
@@ -39,7 +39,15 @@ impl WavReader {
     }
 }
 
-impl PcmReader for WavReader {
+impl WavReader<BufReader<File>> {
+    pub fn open(path: &Path) -> Result<Self, hound::Error> {
+        let inner = hound::WavReader::open(path)?;
+        let spec = inner.spec();
+        Ok(Self { inner, spec })
+    }
+}
+
+impl<R: io::Read> PcmReader for WavReader<R> {
     fn read(&mut self, data: &mut PcmBuffer, size: u32) -> Result<bool, AtracdencError> {
         if data.channels() != self.spec.channels {
             return Err(PcmEngineError::ChannelMismatch.into());
@@ -71,12 +79,29 @@ impl PcmReader for WavReader {
     }
 }
 
-pub struct WavWriter {
-    inner: hound::WavWriter<BufWriter<File>>,
+pub struct WavWriter<W: io::Write + io::Seek> {
+    inner: hound::WavWriter<W>,
     channels: u16,
 }
 
-impl WavWriter {
+impl<W: io::Write + io::Seek> WavWriter<W> {
+    pub fn new(writer: W, channels: u16, sample_rate: u32) -> Result<Self, hound::Error> {
+        let spec = hound::WavSpec {
+            channels,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let inner = hound::WavWriter::new(writer, spec)?;
+        Ok(Self { inner, channels })
+    }
+
+    pub fn finalize(self) -> Result<(), hound::Error> {
+        self.inner.finalize()
+    }
+}
+
+impl WavWriter<BufWriter<File>> {
     pub fn create(path: &Path, channels: u16, sample_rate: u32) -> Result<Self, hound::Error> {
         let spec = hound::WavSpec {
             channels,
@@ -87,13 +112,9 @@ impl WavWriter {
         let inner = hound::WavWriter::create(path, spec)?;
         Ok(Self { inner, channels })
     }
-
-    pub fn finalize(self) -> Result<(), hound::Error> {
-        self.inner.finalize()
-    }
 }
 
-impl PcmWriter for WavWriter {
+impl<W: io::Write + io::Seek> PcmWriter for WavWriter<W> {
     fn write(&mut self, data: &PcmBuffer, size: u32) -> Result<(), AtracdencError> {
         if data.channels() != self.channels {
             return Err(PcmEngineError::ChannelMismatch.into());
@@ -124,6 +145,38 @@ impl PcmWriter for WavWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        cell::RefCell,
+        io::{Cursor, Seek, SeekFrom, Write},
+        rc::Rc,
+    };
+
+    #[derive(Clone, Default)]
+    struct SharedCursor {
+        inner: Rc<RefCell<Cursor<Vec<u8>>>>,
+    }
+
+    impl SharedCursor {
+        fn bytes(&self) -> Vec<u8> {
+            self.inner.borrow().get_ref().clone()
+        }
+    }
+
+    impl Write for SharedCursor {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.inner.borrow_mut().write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.inner.borrow_mut().flush()
+        }
+    }
+
+    impl Seek for SharedCursor {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.inner.borrow_mut().seek(pos)
+        }
+    }
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         let mut path = std::env::temp_dir();
@@ -155,5 +208,32 @@ mod tests {
             assert!((buf.samples()[2] - 32767.0 / 32768.0).abs() < 1.0e-6);
         }
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn wav_round_trip_works_in_memory() {
+        let shared = SharedCursor::default();
+        {
+            let mut writer = WavWriter::new(shared.clone(), 1, 44_100).unwrap();
+            let mut buf = PcmBuffer::new(2, 1);
+            buf.samples_mut().copy_from_slice(&[-0.5, 0.25]);
+            writer.write(&buf, 2).unwrap();
+            writer.finalize().unwrap();
+        }
+
+        let bytes = shared.bytes();
+        assert_eq!(b"RIFF", &bytes[..4]);
+        assert_eq!(b"WAVE", &bytes[8..12]);
+
+        let mut reader = WavReader::new(Cursor::new(bytes)).unwrap();
+        assert_eq!(1, reader.channels());
+        assert_eq!(44_100, reader.sample_rate());
+        assert_eq!(16, reader.bits_per_sample());
+        assert_eq!(2, reader.total_samples());
+
+        let mut buf = PcmBuffer::new(2, 1);
+        assert!(reader.read(&mut buf, 2).unwrap());
+        assert!((buf.samples()[0] + 0.5).abs() < 1.0e-4);
+        assert!((buf.samples()[1] - 0.25).abs() < 1.0e-4);
     }
 }

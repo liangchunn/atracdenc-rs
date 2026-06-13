@@ -149,7 +149,8 @@ fn build_atrac3_energy(mut sample: impl FnMut(usize) -> f32) -> Vec<f32> {
 
         for band in 0..SUBBANDS {
             let state = &mut band_state[band];
-            state[SUBBAND_SAMPLES..(SUBBAND_SAMPLES + SUBBAND_SAMPLES)].copy_from_slice(&subbands[band][..SUBBAND_SAMPLES]);
+            state[SUBBAND_SAMPLES..(SUBBAND_SAMPLES + SUBBAND_SAMPLES)]
+                .copy_from_slice(&subbands[band][..SUBBAND_SAMPLES]);
 
             let mut tmp = [0.0_f32; MDCT_INPUT];
             tmp[..SUBBAND_SAMPLES].copy_from_slice(&state[..SUBBAND_SAMPLES]);

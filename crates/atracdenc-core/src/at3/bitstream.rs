@@ -845,7 +845,12 @@ impl<'a> Default for EncodeCtx<'a> {
 #[allow(dead_code)]
 pub(crate) fn block_band(block: usize) -> usize {
     let mut bfu_band = 0;
-    for (band, &blocks) in BLOCKS_PER_BAND.iter().enumerate().skip(1).take(crate::at3::data::NUM_QMF - 1) {
+    for (band, &blocks) in BLOCKS_PER_BAND
+        .iter()
+        .enumerate()
+        .skip(1)
+        .take(crate::at3::data::NUM_QMF - 1)
+    {
         if block >= blocks as usize {
             bfu_band = band;
         }

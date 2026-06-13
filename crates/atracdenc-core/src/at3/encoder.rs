@@ -418,18 +418,19 @@ impl Processor for Atrac3Encoder {
             }
 
             if !self.settings.no_gain_control
-                && let Some(log) = self.yaml_log.as_deref_mut() {
-                    let _ = writeln!(log, "    gain_energy_scale:");
-                    for band in 0..NUM_QMF {
-                        let scale = sce.gain_energy_scale[band];
-                        let next_overlap = self.prev_overlap_gain_scale[channel][band];
-                        let _ = writeln!(
-                            log,
-                            "      - {{band: {band}, prev_half: {:.6}, cur_half: {:.6}, frame: {:.6}, next_overlap: {:.6}}}",
-                            scale.prev_half, scale.cur_half, scale.frame, next_overlap
-                        );
-                    }
+                && let Some(log) = self.yaml_log.as_deref_mut()
+            {
+                let _ = writeln!(log, "    gain_energy_scale:");
+                for band in 0..NUM_QMF {
+                    let scale = sce.gain_energy_scale[band];
+                    let next_overlap = self.prev_overlap_gain_scale[channel][band];
+                    let _ = writeln!(
+                        log,
+                        "      - {{band: {band}, prev_half: {:.6}, cur_half: {:.6}, frame: {:.6}, next_overlap: {:.6}}}",
+                        scale.prev_half, scale.cur_half, scale.frame, next_overlap
+                    );
                 }
+            }
 
             {
                 let [band0, band1, band2, band3] = &mut self.pcm_bands[channel];

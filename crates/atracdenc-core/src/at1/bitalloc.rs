@@ -195,7 +195,10 @@ fn calc_at1_ath() -> Vec<f32> {
     for band_num in 0..NUM_QMF {
         let s = BLOCKS_PER_BAND[band_num] as usize;
         let e = BLOCKS_PER_BAND[band_num + 1] as usize;
-        for (&specs, &start) in SPECS_PER_BLOCK[s..e].iter().zip(&crate::at1::data::SPECS_START_LONG[s..e]) {
+        for (&specs, &start) in SPECS_PER_BLOCK[s..e]
+            .iter()
+            .zip(&crate::at1::data::SPECS_START_LONG[s..e])
+        {
             let spec_num_start = start as usize;
             let mut x = 999.0_f32;
             for &ath in &ath_spec[spec_num_start..spec_num_start + specs as usize] {

@@ -8,7 +8,7 @@ pub struct Dct4 {
 
 impl Dct4 {
     pub fn new(n: usize, scale: f32) -> Self {
-        assert!(n > 0 && n % 2 == 0);
+        assert!(n > 0 && n.is_multiple_of(2));
         Self {
             n,
             midct: Midct::new(n * 2, (n * 2) as f32 * scale),

@@ -122,18 +122,18 @@ fn snr_for_shift(reference: &[f32], decoded: &[f32], shift: isize) -> Option<(f3
 fn aligned_snr_db(reference: &[f32], decoded: &[f32]) -> (f32, isize, f32) {
     let mut best = (f32::NEG_INFINITY, 0, 1.0);
     for shift in (-4096..=4096).step_by(16) {
-        if let Some((snr, gain)) = snr_for_shift(reference, decoded, shift) {
-            if snr > best.0 {
-                best = (snr, shift, gain);
-            }
+        if let Some((snr, gain)) = snr_for_shift(reference, decoded, shift)
+            && snr > best.0
+        {
+            best = (snr, shift, gain);
         }
     }
     let coarse = best.1;
     for shift in coarse - 32..=coarse + 32 {
-        if let Some((snr, gain)) = snr_for_shift(reference, decoded, shift) {
-            if snr > best.0 {
-                best = (snr, shift, gain);
-            }
+        if let Some((snr, gain)) = snr_for_shift(reference, decoded, shift)
+            && snr > best.0
+        {
+            best = (snr, shift, gain);
         }
     }
     best

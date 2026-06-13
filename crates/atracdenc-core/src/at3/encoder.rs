@@ -140,10 +140,9 @@ impl Atrac3Encoder {
 
     fn build_gain_input(&self, channels: usize) -> Vec<[[f32; 512]; NUM_QMF]> {
         let mut gain_input = vec![[[0.0_f32; 512]; NUM_QMF]; channels];
-        for channel in 0..channels {
-            for band in 0..NUM_QMF {
-                gain_input[channel][band]
-                    .copy_from_slice(&self.lookahead_buf[channel][band][0..512]);
+        for (channel, chan_data) in gain_input.iter_mut().enumerate().take(channels) {
+            for (band, band_data) in chan_data.iter_mut().enumerate().take(NUM_QMF) {
+                band_data.copy_from_slice(&self.lookahead_buf[channel][band][0..512]);
             }
         }
 
@@ -418,8 +417,8 @@ impl Processor for Atrac3Encoder {
                 self.prev_overlap_gain_scale[channel][band] = gain_energy.next_overlap_scale;
             }
 
-            if !self.settings.no_gain_control {
-                if let Some(log) = self.yaml_log.as_deref_mut() {
+            if !self.settings.no_gain_control
+                && let Some(log) = self.yaml_log.as_deref_mut() {
                     let _ = writeln!(log, "    gain_energy_scale:");
                     for band in 0..NUM_QMF {
                         let scale = sce.gain_energy_scale[band];
@@ -431,7 +430,6 @@ impl Processor for Atrac3Encoder {
                         );
                     }
                 }
-            }
 
             {
                 let [band0, band1, band2, band3] = &mut self.pcm_bands[channel];

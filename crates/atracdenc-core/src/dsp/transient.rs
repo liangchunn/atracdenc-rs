@@ -189,7 +189,7 @@ fn median_filter<const RADIUS: usize>(input: &[f32], out: &mut [f32]) {
     let n = input.len() as isize;
     let mut w = vec![0.0; RADIUS * 2 + 1];
 
-    for i in 0..input.len() {
+    for (i, out_val) in out.iter_mut().enumerate() {
         let lo = 0.max(i as isize - RADIUS as isize);
         let hi = (n - 1).min(i as isize + RADIUS as isize);
         let mut wn = 0;
@@ -198,7 +198,7 @@ fn median_filter<const RADIUS: usize>(input: &[f32], out: &mut [f32]) {
             wn += 1;
         }
         w[..wn].sort_by(|a, b| a.total_cmp(b));
-        out[i] = w[wn / 2];
+        *out_val = w[wn / 2];
     }
 }
 

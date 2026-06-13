@@ -35,9 +35,11 @@ fn assert_near_delayed(signal: &[f32], signal_res: &[f32], eps: f32) {
 /// Per-frame gain schedule. For a given frame start position it returns the
 /// modulation curve (for `mdct`) and the (cur, next) demodulation curves (for
 /// `midct`).
+type DemodulateFn = Box<dyn Fn(usize) -> (Vec<GainPoint>, Vec<GainPoint>)>;
+
 struct GainSchedule {
     modulate: Box<dyn Fn(usize) -> Vec<GainPoint>>,
-    demodulate: Box<dyn Fn(usize) -> (Vec<GainPoint>, Vec<GainPoint>)>,
+    demodulate: DemodulateFn,
 }
 
 /// Runs the standard `TAtrac3MDCT` roundtrip harness over band 0.

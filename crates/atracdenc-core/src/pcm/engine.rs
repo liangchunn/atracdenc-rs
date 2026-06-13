@@ -136,12 +136,11 @@ impl PcmEngine {
             let res = processor.process_frame(self.buffer.frames_mut(i, step), &meta);
             if res == ProcessResult::Processed {
                 last_pos += step;
-                if drain {
-                    if self.to_drain != 0 {
+                if drain
+                    && self.to_drain != 0 {
                         self.to_drain -= 1;
                         break;
                     }
-                }
             } else {
                 assert!(!drain);
                 self.to_drain += 1;

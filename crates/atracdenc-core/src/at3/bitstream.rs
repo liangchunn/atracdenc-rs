@@ -786,9 +786,7 @@ pub fn vlc_encode(
             } else {
                 (*mantissa as u32) << 1
             };
-            if huff_s != 0 {
-                huff_s -= 1;
-            }
+            huff_s = huff_s.saturating_sub(1);
             let entry = huff_table[huff_s as usize];
             bits_used += u32::from(entry.bits);
             if let Some(bs) = bitstream.as_deref_mut() {
@@ -847,8 +845,8 @@ impl<'a> Default for EncodeCtx<'a> {
 #[allow(dead_code)]
 pub(crate) fn block_band(block: usize) -> usize {
     let mut bfu_band = 0;
-    for band in 1..crate::at3::data::NUM_QMF {
-        if block >= BLOCKS_PER_BAND[band] as usize {
+    for (band, &blocks) in BLOCKS_PER_BAND.iter().enumerate().skip(1).take(crate::at3::data::NUM_QMF - 1) {
+        if block >= blocks as usize {
             bfu_band = band;
         }
     }

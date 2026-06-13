@@ -33,9 +33,9 @@ impl Atrac3AnalysisFilterBank {
 
         let [sub0, sub1, sub2, sub3] = subs;
         self.qmf2
-            .analysis(&self.buf1[..NUM_SAMPLES / 2], *sub0, *sub1);
+            .analysis(&self.buf1[..NUM_SAMPLES / 2], sub0, sub1);
         self.qmf3
-            .analysis(&self.buf2[..NUM_SAMPLES / 2], *sub3, *sub2);
+            .analysis(&self.buf2[..NUM_SAMPLES / 2], sub3, sub2);
     }
 }
 

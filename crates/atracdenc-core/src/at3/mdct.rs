@@ -141,9 +141,9 @@ impl Atrac3Mdct {
         }
     }
 
-    pub fn make_gain_modulator_array<'a>(
-        subband_info: &'a crate::at3::data::SubbandInfo,
-    ) -> [&'a [GainPoint]; NUM_QMF] {
+    pub fn make_gain_modulator_array(
+        subband_info: &crate::at3::data::SubbandInfo,
+    ) -> [&[GainPoint]; NUM_QMF] {
         let mut out = [&[][..], &[][..], &[][..], &[][..]];
         for (band, dst) in out.iter_mut().enumerate().take(subband_info.qmf_num()) {
             *dst = subband_info.gain_points(band);
@@ -300,7 +300,7 @@ mod tests {
         assert_eq!(10, relation_to_idx(0.015625));
         assert_eq!(13, relation_to_idx(0.001_953_125));
         assert_eq!(15, relation_to_idx(0.000_488_281_25));
-        assert_eq!(15, relation_to_idx(0.000_000_488_281_25));
+        assert_eq!(15, relation_to_idx(0.000_000_488_281_3));
     }
 
     #[test]

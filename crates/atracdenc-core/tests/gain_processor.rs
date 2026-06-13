@@ -3,6 +3,7 @@
 //! Five groups:
 //!   * `energy_scale_*`   — `Atrac3Mdct::calc_gain_energy_scale` behaviour.
 //!   * `modulate_*`       — per-sample attenuation rules of `modulate`.
+#![allow(clippy::needless_range_loop)]
 //!   * `demodulate_*`     — per-sample re-amplification rules of `demodulate`.
 //!   * `mirror_*`         — algebraic modulate -> demodulate identities.
 //!   * `freq_domain_*`    — full MDCT-domain energy-reduction + roundtrip.

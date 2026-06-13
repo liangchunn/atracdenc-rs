@@ -28,7 +28,7 @@ pub struct Mdct {
 
 impl Mdct {
     pub fn new(n: usize, scale: f32) -> Self {
-        assert!(n >= 4 && n % 4 == 0);
+        assert!(n >= 4 && n.is_multiple_of(4));
         Self {
             n,
             sincos: calc_sin_cos(n, scale),
@@ -101,7 +101,7 @@ pub struct Midct {
 
 impl Midct {
     pub fn new(n: usize, scale: f32) -> Self {
-        assert!(n >= 4 && n % 4 == 0);
+        assert!(n >= 4 && n.is_multiple_of(4));
         Self {
             n,
             sincos: calc_sin_cos(n, scale / 2.0),

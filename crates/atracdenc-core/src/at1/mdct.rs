@@ -65,8 +65,7 @@ impl Atrac1Mdct {
                 tmp[win_start..win_start + 32].copy_from_slice(&src_buf[buf_sz..buf_sz + 32]);
                 for i in 0..32 {
                     src_buf[buf_sz + i] = SINE_WINDOW[i] * src_buf[block_pos + block_sz - 32 + i];
-                    src_buf[block_pos + block_sz - 32 + i] =
-                        SINE_WINDOW[31 - i] * src_buf[block_pos + block_sz - 32 + i];
+                    src_buf[block_pos + block_sz - 32 + i] *= SINE_WINDOW[31 - i];
                 }
                 tmp[win_start + 32..win_start + 32 + block_sz]
                     .copy_from_slice(&src_buf[block_pos..block_pos + block_sz]);

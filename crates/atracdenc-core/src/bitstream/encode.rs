@@ -150,7 +150,7 @@ mod tests {
     use super::*;
 
     fn some_bit_fn_1(lambda: f32) -> usize {
-        ((lambda * -1.0).sqrt() * 300.0) as usize
+        ((-lambda).sqrt() * 300.0) as usize
     }
 
     fn some_bit_fn_2(lambda: f32) -> usize {

@@ -229,10 +229,10 @@ mod tests {
         for frame in 0..num_frames {
             let base = frame as usize * 256;
             let mut up_input = vec![0.0; SpectralUpsampler::IN_N];
-            for j in 0..128 {
+            for (j, up_val) in up_input.iter_mut().enumerate().take(128) {
                 let idx = base as isize - 128 + j as isize;
                 if idx >= 0 {
-                    up_input[j] = signal[idx as usize];
+                    *up_val = signal[idx as usize];
                 }
             }
             up_input[128..384].copy_from_slice(&signal[base..base + 256]);

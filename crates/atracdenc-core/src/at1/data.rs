@@ -67,6 +67,7 @@ impl Default for EncodeSettings {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Default)]
 pub struct BlockSizeMod {
     pub log_count: [u32; NUM_QMF],
 }
@@ -97,11 +98,6 @@ impl BlockSizeMod {
     }
 }
 
-impl Default for BlockSizeMod {
-    fn default() -> Self {
-        Self { log_count: [0; 3] }
-    }
-}
 
 pub fn bfu_to_band(i: u32) -> u32 {
     if i < 20 {

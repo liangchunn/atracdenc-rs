@@ -380,11 +380,10 @@ fn validate_encode_flags(opts: &CliOptions, codec: Codec) -> Result<(), io::Erro
     if codec != Codec::Atrac3 && codec != Codec::Atrac3Lp4 && opts.bitrate.is_some() {
         return Err(invalid_input("--bitrate is only supported for atrac3"));
     }
-    if let Some(bitrate) = opts.bitrate {
-        if !(32..=384).contains(&bitrate) {
+    if let Some(bitrate) = opts.bitrate
+        && !(32..=384).contains(&bitrate) {
             return Err(invalid_input("--bitrate must be in the range 32..384"));
         }
-    }
     Ok(())
 }
 

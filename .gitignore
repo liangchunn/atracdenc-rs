@@ -1,3 +1,4 @@
 /target
 *.aea
 *.wav
+.DS_Store

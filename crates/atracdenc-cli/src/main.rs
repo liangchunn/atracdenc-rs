@@ -59,6 +59,9 @@ struct CliOptions {
     no_gain_control: bool,
     #[arg(long = "yaml-log")]
     yaml_log: Option<PathBuf>,
+    #[arg(long = "advanced")]
+    /// ATRAC3+ advanced options (e.g. ghadbg=5)
+    advanced: Option<String>,
     #[arg(short = 'm', hide = true)]
     /// not implemented
     mono: bool,
@@ -147,6 +150,9 @@ fn encode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
     if opts.yaml_log.is_some() && !matches!(codec, Codec::Atrac3 | Codec::Atrac3Lp4) {
         return Err(invalid_input("--yaml-log is only supported for ATRAC3 encode").into());
     }
+    if opts.advanced.is_some() && codec != Codec::Atrac3plus {
+        return Err(invalid_input("--advanced is only supported for ATRAC3plus encode").into());
+    }
 
     let codec_api = atracdenc::Codec::from(codec);
     let input = opts
@@ -190,6 +196,10 @@ fn encode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
             bfu_idx_fast: opts.bfu_idx_fast,
         });
 
+    if let Some(advanced) = opts.advanced.as_ref() {
+        builder = builder.advanced(advanced.clone());
+    }
+
     let temp_output = temp_output_path(&output);
     let temp_yaml_log = opts
         .yaml_log
@@ -226,6 +236,9 @@ fn encode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
 fn decode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
     if opts.yaml_log.is_some() {
         return Err(invalid_input("--yaml-log is only supported for ATRAC3 encode").into());
+    }
+    if opts.advanced.is_some() {
+        return Err(invalid_input("--advanced is only supported for ATRAC3plus encode").into());
     }
 
     let codec = opts.encode.unwrap_or(Codec::Atrac1);

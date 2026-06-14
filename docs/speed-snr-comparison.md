@@ -1,27 +1,28 @@
-# Speed and SNR comparison: C++ vs Rust port
+# Benchmarks for 2026-06-14 13:34:50
 
-All tests use input file `atrac1_input_from_m4a.wav` (PCM s16le, 44100 Hz, stereo, 240 s).
+| Binary | Version |
+|--------|---------|
+| PATH | atracdenc  (C++) |
+| Dev | atracdenc-cli 0.1.0 |
 
-**Methodology:** SNR is computed on the decoded PCM WAV output (not the encoded
-bitstream). ATRAC3 uses ffmpeg as a shared decoder; ATRAC1 uses each binary's own
-decoder. Speed measurements use hyperfine (`--warmup 1 --runs 3`) for statistical
-mean timing. Rust commands use `RUST_LOG=off` and C++ commands use
-`> /dev/null` to eliminate console I/O from the timing.
+Input: /Users/liangchun/dev/rust/atracdenc-codex/atrac1_input_from_m4a.wav
 
-Reproduce: `bash docs/bench.sh`
+**Methodology:** SNR is computed on the decoded PCM WAV output
+(not the encoded bitstream). ATRAC3/ATRAC3plus uses ffmpeg as a shared
+decoder; ATRAC1 uses each binary's own decoder.
+
+The **PATH** binary is the C++ reference; the **Dev** binary is the Rust
+project build. Ratio > 1 means Dev is faster.
 
 ## ATRAC1 (SP mode, 292 kbps stereo)
 
-Workflow: encode PCM → AEA, then decode AEA → PCM.
-SNR computed between the decoded PCM outputs (C++ reference, Rust test).
-
 ### Speed
 
-| Stage | C++ (s) | Rust (s) | Ratio |
-|-------|---------|----------|-------|
-| Encode | 1.713 | 0.809 | **2.11× faster** |
-| Decode | 0.271 | 0.255 | 1.06× |
-| **Total** | **1.984** | **1.064** | **1.86× faster** |
+| Stage | PATH (s) | Dev (s) | Ratio |
+|-------|----------|---------|-------|
+| Encode | 1.524 | 0.766 | **1.98×** |
+| Decode | 0.276 | 0.227 | 1.21× |
+| **Total** | **1.800** | **0.993** | **1.81×** |
 
 ### Output quality
 
@@ -29,121 +30,105 @@ SNR computed between the decoded PCM outputs (C++ reference, Rust test).
 |--------|-------|
 | AEA file size | 8,773,760 B (identical) |
 | Decoded PCM SNR | **81.61 dB** |
-| AEA bitstreams | Differ (as expected, see [precision-analysis.md](precision-analysis.md)) |
-
-The decode gap vs C++ was closed and reversed: the Rust decoder is now faster
-than C++ (0.73× → 1.06×). The improvement came from profiling-guided
-optimization (see [decode-profiling.md](decode-profiling.md)):
-
-- **QMF synthesis vectorization** — the 48-tap convolution (43.6% of decode
-  self-time) was restructured from interleaved even/odd memory access to
-  contiguous FIR loops. Combined with pointer arithmetic to eliminate bounds
-  checks, LLVM now emits NEON `fmul.4s`/`fadd.4s` instructions processing 4
-  floats per cycle, yielding a ~1.8× speedup in QMF alone.
-- **Dequant micro-optimizations** — precomputed `scale_factor * max_quant`
-  once per BFU instead of per coefficient, and eliminated per-frame `Vec`
-  allocations for `specs` and `sum` buffers.
-- **Bulk WAV output** — the WAV writer previously emitted one `write_sample`
-  call per PCM sample; it now batches a whole buffer through hound's
-  `get_i16_writer`.
-- **Word-at-a-time bit reader** — `BitStream::read` now reads byte-aligned
-  chunks instead of one bit per iteration.
-
-The SNR drop from 84.40 dB → 81.61 dB is due to the QMF analysis convolution
-accumulating terms in a slightly different floating-point order after the
-contiguous-loop restructuring. 81.61 dB remains well above audible thresholds.
 
 ---
 
 ## ATRAC3 LP2 (128 kbps stereo)
 
-Workflow: encode PCM → ATRAC3-in-RIFF-WAV.
-Both outputs decoded to PCM via ffmpeg for SNR comparison.
-
 ### Speed
 
 | Binary | Time (s) | Ratio |
 |--------|----------|-------|
-| C++ | 6.030 | — |
-| Rust | 2.763 | **2.18× faster** |
+| PATH (C++) | 5.606 | — |
+| Dev (Rust) | 2.658 | **2.10×** |
 
 ### Output quality
 
 | Metric | Value |
 |--------|-------|
 | Output file size | 3,972,172 B (identical) |
-| Bitrate (ffprobe) | 132,296 bps (both) |
-| Cross-encoder SNR | **34.70 dB** |
+| Bitrate (ffprobe) | 132296 bps (both) |
+| Cross-encoder SNR | **33.25 dB** |
 
 ---
 
 ## ATRAC3 LP105 (102 kbps stereo)
 
-Workflow: same as LP2.
-
 ### Speed
 
 | Binary | Time (s) | Ratio |
 |--------|----------|-------|
-| C++ | 6.431 | — |
-| Rust | 2.701 | **2.38× faster** |
+| PATH (C++) | 5.931 | — |
+| Dev (Rust) | 2.645 | **2.24×** |
 
 ### Output quality
 
 | Metric | Value |
 |--------|-------|
 | Output file size | 3,144,652 B (identical) |
-| Bitrate (ffprobe) | 104,736 bps (both) |
-| Cross-encoder SNR | **29.89 dB** |
+| Bitrate (ffprobe) | 104736 bps (both) |
+| Cross-encoder SNR | **29.37 dB** |
 
 ---
 
 ## ATRAC3 LP4 (64 kbps stereo, ATRAC3_LP)
 
-Workflow: same as LP2. Note: C++ uses `-e atrac3_lp4`, Rust uses `-e atrac3-lp4`.
-
 ### Speed
 
 | Binary | Time (s) | Ratio |
 |--------|----------|-------|
-| C++ | 6.598 | — |
-| Rust | 2.496 | **2.64× faster** |
+| PATH (C++) | 6.301 | — |
+| Dev (Rust) | 2.372 | **2.65×** |
 
 ### Output quality
 
 | Metric | Value |
 |--------|-------|
 | Output file size | 1,986,124 B (identical) |
-| Bitrate (ffprobe) | 66,144 bps (both) |
-| Cross-encoder SNR | **28.06 dB** |
+| Bitrate (ffprobe) | 66144 bps (both) |
+| Cross-encoder SNR | **27.50 dB** |
+
+---
+
+## ATRAC3plus (~352 kbps stereo)
+
+### Speed
+
+| Binary | Time (s) | Ratio |
+|--------|----------|-------|
+| PATH (C++) | 14.426 | — |
+| Dev (Rust) | 14.955 | **0.96×** |
+
+### Output quality
+
+| Metric | Value |
+|--------|-------|
+| Output file size | 10,592,352 B (identical) |
+| Bitrate (ffprobe) | 352800 bps (both) |
+| Cross-encoder SNR | **41.93 dB** |
 
 ---
 
 ## Summary
 
-| Mode | Codec | Bitrate | C++ (s) | Rust (s) | Speedup | SNR |
-|------|-------|---------|---------|----------|---------|-----|
-| SP | atrac1 | 292 kbps | 1.984¹ | 1.064¹ | **1.86×** | **81.61 dB** |
-| LP2 | atrac3 | 128 kbps | 6.030 | 2.763 | **2.18×** | **34.70 dB** |
-| LP105 | atrac3 | 102 kbps | 6.431 | 2.701 | **2.38×** | **29.89 dB** |
-| LP4 | atrac3_lp4 | 64 kbps | 6.598 | 2.496 | **2.64×** | **28.06 dB** |
+| Mode | Codec | Bitrate | PATH (s) | Dev (s) | Speedup | SNR |
+|------|-------|---------|----------|---------|---------|-----|
+| SP | atrac1 | 292 kbps | 1.800¹ | 0.993¹ | **1.81×** | **81.61 dB** |
+| LP2 | atrac3 | 128 kbps | 5.606 | 2.658 | **2.10×** | **33.25 dB** |
+| LP105 | atrac3 | 102 kbps | 5.931 | 2.645 | **2.24×** | **29.37 dB** |
+| LP4 | atrac3_lp4 | 64 kbps | 6.301 | 2.372 | **2.65×** | **27.50 dB** |
+| — | atrac3plus | ~352 kbps | 14.426 | 14.955 | **0.96×** | **41.93 dB** |
 
 ¹ ATRAC1 times are encode + decode combined.
 
 ## Notes
 
-- The Rust port is consistently **1.9–2.6× faster** than the C++ reference for
-  encoding, while producing bit-identical file sizes. The ATRAC1 decode gap was
-  fully closed: Rust decode is now 1.06× C++ speed vs 0.73× previously.
-- SNR (Signal-to-Noise Ratio): higher = better. Measures how close the Rust
-  decoded PCM output is to the C++ reference. 84 dB = nearly identical;
-  28 dB = audible differences.
-- ATRAC3 cross-encoder SNR is lower than ATRAC1 (28–35 dB vs 82 dB). This is
-  expected as ATRAC3 has more precision-sensitive stages (gain control, tonal
-  extraction, joint stereo matrixing) where floating-point differences between
-  C++ and Rust compound across frames. See [precision-analysis.md](precision-analysis.md)
-  for details.
-- The `--bitrate` flag had a unit mismatch bug (kbps vs bps) in the Rust CLI
-  that was fixed during testing (`crates/atracdenc-cli/src/main.rs:265`).
-- Speed measurements use hyperfine `--warmup 1 --runs 3` for statistical mean
-  timing. Run `bash docs/bench.sh` to reproduce.
+- Measurements use hyperfine (--warmup 1 --runs 3) for statistical benchmarking.
+- Dev (Rust) uses `RUST_LOG=off` to eliminate console I/O.
+- PATH (C++) uses `>/dev/null` to suppress progress output.
+- Ratio > 1 means Dev is faster than PATH.
+- SNR (Signal-to-Noise Ratio): higher = better. Measures how close the Dev
+  output is to the PATH (C++) reference.
+- ATRAC3/ATRAC3plus: both encoded bitstreams decoded via ffmpeg for SNR.
+- ATRAC1: each binary decodes its own bitstream (ffmpeg has no ATRAC1 decoder).
+- C++ uses `atrac3_lp4`; Rust uses `atrac3-lp4` for LP4 mode.

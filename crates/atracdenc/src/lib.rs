@@ -14,6 +14,7 @@ use atracdenc_core::{
         data::{BfuAllocMode as CoreBfuAllocMode, EncodeSettings as CoreAt3Settings, LP4},
         encoder::Atrac3Encoder,
     },
+    at3p::encoder::{At3pEncoder, At3pSettings, parse_advanced_opt},
     container::{
         CompressedInput, CompressedOutput, ContainerError,
         aea::{AEA_FRAME_SIZE, AeaInput, AeaOutput},
@@ -141,6 +142,7 @@ pub struct EncodeBuilder {
     at1: At1Settings,
     at3: At3Settings,
     yaml_log: Option<Box<dyn Write>>,
+    advanced: Option<String>,
 }
 
 enum EncodeInput {
@@ -168,6 +170,7 @@ impl EncodeBuilder {
             at1: At1Settings::default(),
             at3: At3Settings::default(),
             yaml_log: None,
+            advanced: None,
         }
     }
 
@@ -207,6 +210,12 @@ impl EncodeBuilder {
 
     pub fn yaml_log_writer<W: Write + 'static>(mut self, writer: W) -> Self {
         self.yaml_log = Some(Box::new(writer));
+        self
+    }
+
+    /// ATRAC3+ `--advanced` option string (e.g. `ghadbg=5`).
+    pub fn advanced(mut self, advanced: impl Into<String>) -> Self {
+        self.advanced = Some(advanced.into());
         self
     }
 
@@ -334,9 +343,6 @@ fn encode(mut builder: EncodeBuilder) -> Result<EncodedOutput> {
         codec_name(builder.codec),
         container_name(container)
     );
-    if builder.codec == Codec::Atrac3plus {
-        return Err(invalid_input("ATRAC3plus encoding is not ported yet"));
-    }
 
     log_encode_summary(
         builder.codec,
@@ -528,7 +534,18 @@ where
             )?;
             build_atrac3_encoder(output, settings, builder.yaml_log.take())
         }
-        Codec::Atrac3plus => unreachable!("ATRAC3plus is rejected before encoder construction"),
+        Codec::Atrac3plus => {
+            let mut settings = At3pSettings::default();
+            parse_advanced_opt(builder.advanced.as_deref(), &mut settings)?;
+            debug!(
+                "building ATRAC3plus encoder: container={}, channels={channels}, sample_rate={sample_rate}, frame_count={frame_count}, use_gha={}",
+                container_name(container),
+                settings.use_gha
+            );
+            let output =
+                build_atrac3plus_output(output, container, channels, sample_rate, frame_count)?;
+            Ok(Box::new(At3pEncoder::new(output, channels, settings)))
+        }
     }
 }
 
@@ -650,19 +667,78 @@ where
     }
 }
 
+fn build_atrac3plus_output<W>(
+    output: W,
+    container: Container,
+    channels: usize,
+    sample_rate: u32,
+    frame_count: u32,
+) -> Result<Box<dyn CompressedOutput>>
+where
+    W: Write + Seek + 'static,
+{
+    const AT3P_FRAME_SZ: u32 = 2048;
+    match container {
+        Container::Oma => {
+            let channel_format = if channels == 1 {
+                OmaChannelFormat::Mono
+            } else {
+                OmaChannelFormat::Stereo
+            };
+            Ok(Box::new(OmaOutput::new(
+                output,
+                OmaCodec::Atrac3Plus,
+                sample_rate,
+                channel_format,
+                AT3P_FRAME_SZ,
+            )?))
+        }
+        Container::Riff => Ok(Box::new(At3Output::atrac3plus(
+            output,
+            channels,
+            frame_count,
+            AT3P_FRAME_SZ,
+        )?)),
+        Container::Raw => Ok(Box::new(RawOutput::new(
+            output,
+            channels,
+            Some(AT3P_FRAME_SZ as usize),
+        ))),
+        _ => unreachable!("ATRAC3plus container validity checked earlier"),
+    }
+}
+
 fn validate_encode_settings(builder: &EncodeBuilder) -> Result<()> {
     if builder.codec != Codec::Atrac1 && builder.at1.window_mode == At1WindowMode::NoTransient {
         return Err(invalid_input("--notransient is only supported for atrac1"));
     }
-    if builder.codec == Codec::Atrac1 && builder.yaml_log.is_some() {
+    if !matches!(builder.codec, Codec::Atrac3 | Codec::Atrac3Lp4) && builder.yaml_log.is_some() {
         return Err(invalid_input("--yaml-log is only supported for ATRAC3"));
     }
-    if builder.codec == Codec::Atrac1
+    if !matches!(builder.codec, Codec::Atrac3 | Codec::Atrac3Lp4)
         && (builder.at3.no_gain_control || builder.at3.no_tonal_components)
     {
         return Err(invalid_input(
             "--nogaincontrol and --notonal are only supported for atrac3",
         ));
+    }
+    if !matches!(builder.codec, Codec::Atrac3 | Codec::Atrac3Lp4)
+        && builder.at3.bfu_mode != At3BfuMode::Fast
+    {
+        return Err(invalid_input("--at3-bfu-mode is only supported for atrac3"));
+    }
+    if !matches!(builder.codec, Codec::Atrac3 | Codec::Atrac3Lp4) && builder.at3.bfu_idx_fast {
+        return Err(invalid_input("--bfuidxfast is only supported for atrac3"));
+    }
+    if matches!(builder.codec, Codec::Atrac3plus)
+        && (builder.at1.bfu_idx_const != 0 || builder.at3.bfu_idx_const != 0)
+    {
+        return Err(invalid_input(
+            "--bfuidxconst is not supported for atrac3plus",
+        ));
+    }
+    if builder.codec != Codec::Atrac3plus && builder.advanced.is_some() {
+        return Err(invalid_input("--advanced is only supported for atrac3plus"));
     }
     if !matches!(builder.codec, Codec::Atrac3 | Codec::Atrac3Lp4)
         && builder.at3.bitrate_kbps.is_some()
@@ -1024,6 +1100,85 @@ mod tests {
             .unwrap();
         assert_eq!(b"EA3", &bytes[..3]);
         assert!(bytes.len() > 96);
+    }
+
+    #[test]
+    fn rejects_advanced_for_non_atrac3plus() {
+        let err = EncodeBuilder::new()
+            .codec(Codec::Atrac3)
+            .advanced("ghadbg=0")
+            .run_to_vec()
+            .unwrap_err();
+
+        assert_eq!(
+            "invalid input: --advanced is only supported for atrac3plus",
+            err.to_string()
+        );
+    }
+
+    #[test]
+    fn rejects_ignored_atrac3_options_for_atrac3plus() {
+        let err = EncodeBuilder::new()
+            .codec(Codec::Atrac3plus)
+            .yaml_log_writer(Vec::new())
+            .run_to_vec()
+            .unwrap_err();
+        assert_eq!(
+            "invalid input: --yaml-log is only supported for ATRAC3",
+            err.to_string()
+        );
+
+        let err = EncodeBuilder::new()
+            .codec(Codec::Atrac3plus)
+            .at3_settings(At3Settings {
+                no_gain_control: true,
+                ..At3Settings::default()
+            })
+            .run_to_vec()
+            .unwrap_err();
+        assert_eq!(
+            "invalid input: --nogaincontrol and --notonal are only supported for atrac3",
+            err.to_string()
+        );
+
+        let err = EncodeBuilder::new()
+            .codec(Codec::Atrac3plus)
+            .at3_settings(At3Settings {
+                bfu_mode: At3BfuMode::Parity,
+                ..At3Settings::default()
+            })
+            .run_to_vec()
+            .unwrap_err();
+        assert_eq!(
+            "invalid input: --at3-bfu-mode is only supported for atrac3",
+            err.to_string()
+        );
+
+        let err = EncodeBuilder::new()
+            .codec(Codec::Atrac3plus)
+            .at3_settings(At3Settings {
+                bfu_idx_fast: true,
+                ..At3Settings::default()
+            })
+            .run_to_vec()
+            .unwrap_err();
+        assert_eq!(
+            "invalid input: --bfuidxfast is only supported for atrac3",
+            err.to_string()
+        );
+
+        let err = EncodeBuilder::new()
+            .codec(Codec::Atrac3plus)
+            .at3_settings(At3Settings {
+                bfu_idx_const: 1,
+                ..At3Settings::default()
+            })
+            .run_to_vec()
+            .unwrap_err();
+        assert_eq!(
+            "invalid input: --bfuidxconst is not supported for atrac3plus",
+            err.to_string()
+        );
     }
 
     #[test]

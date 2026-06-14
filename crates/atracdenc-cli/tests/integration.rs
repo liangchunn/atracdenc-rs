@@ -487,3 +487,141 @@ fn explicit_container_overrides_extension_and_invalid_combos_fail() {
 
     let _ = fs::remove_dir_all(dir);
 }
+
+fn write_wav_stereo(path: &Path, frames: usize) {
+    let mut bytes = Vec::new();
+    let data_len = frames as u32 * 2 * 2; // 2 channels * 2 bytes
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&2_u16.to_le_bytes()); // stereo
+    bytes.extend_from_slice(&44_100_u32.to_le_bytes());
+    bytes.extend_from_slice(&(44_100_u32 * 4).to_le_bytes());
+    bytes.extend_from_slice(&4_u16.to_le_bytes());
+    bytes.extend_from_slice(&16_u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_len.to_le_bytes());
+    for i in 0..frames {
+        let l = (2.0 * std::f64::consts::PI * 440.0 * i as f64 / 44_100.0).sin() * 8000.0;
+        let r = (2.0 * std::f64::consts::PI * 660.0 * i as f64 / 44_100.0).sin() * 8000.0;
+        bytes.extend_from_slice(&(l as i16).to_le_bytes());
+        bytes.extend_from_slice(&(r as i16).to_le_bytes());
+    }
+    fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn atrac3plus_oma_smoke() {
+    let dir = tempdir("at3p-smoke");
+    let input = dir.join("in.wav");
+    // 0.5s stereo sine
+    write_wav_stereo(&input, 22_050);
+    let out = dir.join("out.oma");
+
+    let result = run(&[
+        "-e",
+        "atrac3plus",
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--container",
+        "oma",
+    ]);
+    assert_success(result);
+
+    let bytes = fs::read(&out).unwrap();
+    // OMA EA3 header is 96 bytes; AT3+ frames are 2048 bytes each.
+    assert!(bytes.len() > 96, "output too small: {}", bytes.len());
+    let payload = bytes.len() - 96;
+    assert_eq!(payload % 2048, 0, "payload not frame-aligned: {payload}");
+    assert!(
+        payload / 2048 >= 9,
+        "expected ~10 frames, got {}",
+        payload / 2048
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn atrac3plus_advanced_opt() {
+    let dir = tempdir("at3p-advanced");
+    let input = dir.join("in.wav");
+    write_wav_stereo(&input, 8192);
+    let out = dir.join("out.oma");
+
+    // ghadbg=0 disables GHA passes; should still encode successfully.
+    let result = run(&[
+        "-e",
+        "atrac3plus",
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--container",
+        "oma",
+        "--advanced",
+        "ghadbg=0",
+    ]);
+    assert_success(result);
+    assert!(fs::read(&out).unwrap().len() > 96);
+
+    // Invalid mask must fail.
+    let bad = run(&[
+        "-e",
+        "atrac3plus",
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        dir.join("bad.oma").to_str().unwrap(),
+        "--advanced",
+        "ghadbg=9",
+    ]);
+    assert!(!bad.status.success());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn advanced_is_rejected_for_non_atrac3plus() {
+    let dir = tempdir("advanced-non-at3p");
+    let input = dir.join("in.wav");
+    write_wav(&input, 2048);
+    let out = dir.join("out.oma");
+
+    let result = run(&[
+        "-e",
+        "atrac3",
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--advanced",
+        "ghadbg=0",
+    ]);
+
+    assert!(!result.status.success());
+    assert!(combined_lower(&result).contains("advanced is only supported for atrac3plus"));
+    assert!(!out.exists());
+    assert_no_temp_for(&out);
+
+    let decode_out = dir.join("decode.wav");
+    let result = run(&[
+        "-d",
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        decode_out.to_str().unwrap(),
+        "--advanced",
+        "ghadbg=0",
+    ]);
+    assert!(!result.status.success());
+    assert!(combined_lower(&result).contains("advanced is only supported for atrac3plus"));
+    assert!(!decode_out.exists());
+    assert_no_temp_for(&decode_out);
+
+    let _ = fs::remove_dir_all(dir);
+}

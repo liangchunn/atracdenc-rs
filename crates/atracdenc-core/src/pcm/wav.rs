@@ -35,7 +35,7 @@ impl<R: io::Read> WavReader<R> {
     }
 
     pub fn total_samples(&self) -> u64 {
-        u64::from(self.inner.duration()) / u64::from(self.spec.channels)
+        u64::from(self.inner.duration())
     }
 }
 
@@ -235,5 +235,22 @@ mod tests {
         assert!(reader.read(&mut buf, 2).unwrap());
         assert!((buf.samples()[0] + 0.5).abs() < 1.0e-4);
         assert!((buf.samples()[1] - 0.25).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn stereo_total_samples_counts_frames_not_values() {
+        let shared = SharedCursor::default();
+        {
+            let mut writer = WavWriter::new(shared.clone(), 2, 44_100).unwrap();
+            let mut buf = PcmBuffer::new(3, 2);
+            buf.samples_mut()
+                .copy_from_slice(&[0.0, 0.1, 0.2, 0.3, -0.4, -0.5]);
+            writer.write(&buf, 3).unwrap();
+            writer.finalize().unwrap();
+        }
+
+        let reader = WavReader::new(Cursor::new(shared.bytes())).unwrap();
+        assert_eq!(2, reader.channels());
+        assert_eq!(3, reader.total_samples());
     }
 }

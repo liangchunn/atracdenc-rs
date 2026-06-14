@@ -6,11 +6,13 @@
 
 pub mod at1;
 pub mod at3;
+pub mod at3p;
 pub mod atrac;
 pub mod bitstream;
 pub mod container;
 pub mod dsp;
 pub mod error;
+pub mod gha;
 pub mod pcm;
 pub mod util;
 

@@ -1,7 +1,7 @@
 # atracdenc (Rust port)
 
-A free LGPL implementation of ATRAC1 and ATRAC3 encoders, ported from C++ to
-Rust.
+A free LGPL implementation of ATRAC1, ATRAC3, and ATRAC3plus encoders, ported
+from C++ to Rust.
 
 **Original C++ reference:** <https://github.com/dcherednik/atracdenc>  
 **Ported from commit:** [`01234b0`][upstream-commit] ("Add explicit container selection")
@@ -13,11 +13,11 @@ Rust.
 | Crate | Type | Description |
 |---|---|---|
 | [`atracdenc`](crates/atracdenc/) | Library | High-level facade: builders, validation, container inference |
-| [`atracdenc-core`](crates/atracdenc-core/) | Library | ATRAC1 and ATRAC3 encode/decode engine |
+| [`atracdenc-core`](crates/atracdenc-core/) | Library | ATRAC1, ATRAC3, and ATRAC3plus encode/decode engine |
 | [`atracdenc-cli`](crates/atracdenc-cli/) | Binary | CLI frontend (produces the `atracdenc` binary) |
 
 See [`crates/atracdenc/README.md`](crates/atracdenc/README.md) for library API
-examples covering ATRAC1, ATRAC3 LP2, and ATRAC3 LP4 usage.
+examples covering ATRAC1, ATRAC3 LP2, ATRAC3 LP4, and ATRAC3plus usage.
 
 The workspace is a virtual manifest — build the CLI to get the binary:
 
@@ -31,20 +31,19 @@ cargo build --release -p atracdenc-cli
 |---|---|---|
 | **ATRAC1** | Yes | Yes |
 | **ATRAC3** (LP2 / LP4) | Yes | No |
-| **ATRAC3plus** | **Not ported** | No |
+| **ATRAC3plus** | Yes | No |
 
-ATRAC3plus encoding is not yet ported. The CLI will report an error if
-`--encode atrac3plus` is requested.
+ATRAC3plus decode is not yet ported.
 
 ## Containers
 
-| Container | Extension | ATRAC1 | ATRAC3 |
-|---|---|---|---|
-| AEA | `.aea` | Yes | — |
-| OMA | `.oma`, `.omg` | — | Yes |
-| RIFF/WAV | `.at3`, `.wav` | — | Yes |
-| RealMedia | `.rm`, `.ra` | — | Yes |
-| Raw frames | `.raw`, `.dat` | Yes | Yes |
+| Container | Extension | ATRAC1 | ATRAC3 | ATRAC3plus |
+|---|---|---|---|---|
+| AEA | `.aea` | Yes | — | — |
+| OMA | `.oma`, `.omg` | — | Yes | Yes |
+| RIFF/WAV | `.at3`, `.wav` | — | Yes | Yes |
+| RealMedia | `.rm`, `.ra` | — | Yes | — |
+| Raw frames | `.raw`, `.dat` | Yes | Yes | Yes |
 
 Containers are inferred from the output file extension. Use `--container` to
 override.
@@ -67,6 +66,12 @@ atracdenc -e atrac3 --at3-bfu-mode parity -i input.wav -o output.oma
 # ATRAC3 LP4 encode, joint stereo (~66 kbps)
 atracdenc -e atrac3-lp4 -i input.wav -o output.oma
 
+# ATRAC3plus encode (defaults to OMA container)
+atracdenc -e atrac3plus -i input.wav -o output.oma
+
+# ATRAC3plus with GHA debug flags
+atracdenc -e atrac3plus --advanced ghadbg=0 -i input.wav -o output.oma
+
 # Explicit container override
 atracdenc -e atrac3 --container riff -i input.wav -o output.at3
 
@@ -88,7 +93,9 @@ RUST_LOG=off atracdenc -e atrac3 -i input.wav -o output.oma
 
 Input must be 44100 Hz, 16-bit, mono or stereo WAV. Decode only supports ATRAC1
 from AEA input. ATRAC3 uses fast BFU allocation by default; use
-`--at3-bfu-mode parity` when comparing encoder output against the C++ reference.
+`--at3-bfu-mode parity` when comparing encoder output against the C++
+reference. ATRAC3plus uses GHA-based tonal analysis; pass
+`--advanced ghadbg=<mask>` to control GHA processing flags.
 
 ## Building
 

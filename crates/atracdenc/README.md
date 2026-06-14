@@ -42,6 +42,7 @@ atracdenc = { path = "../atracdenc" }
 | ATRAC1 | `Codec::Atrac1` | AEA (`.aea`) | Encodes and decodes. |
 | ATRAC3 LP2 | `Codec::Atrac3` with default `At3Settings` | OMA (`.oma`) | Default ATRAC3 mode, about 132 kbps stereo. |
 | ATRAC3 LP4 | `Codec::Atrac3Lp4` | OMA (`.oma`) | Low-bitrate ATRAC3 mode, about 66 kbps stereo. |
+| ATRAC3plus | `Codec::Atrac3plus` | OMA (`.oma`) | Encodes only. `--advanced ghadbg=<mask>` controls GHA flags. |
 
 For ATRAC3, `bitrate_kbps` is a request. The encoder selects the first supported
 ATRAC3 frame format at or above that requested rate.
@@ -67,8 +68,8 @@ fn main() -> atracdenc::Result<()> {
 }
 ```
 
-If `container(...)` is omitted for in-memory output, ATRAC1 defaults to AEA and
-ATRAC3 defaults to OMA.
+If `container(...)` is omitted for in-memory output, ATRAC1 defaults to AEA,
+ATRAC3 defaults to OMA, and ATRAC3plus defaults to OMA.
 
 ## Decode to Memory
 
@@ -191,9 +192,9 @@ fn main() -> atracdenc::Result<()> {
 
 ## Containers
 
-If `container(...)` is omitted, ATRAC1 defaults to AEA and ATRAC3 defaults to
-OMA. Filename extension inference is handled by `atracdenc-cli`, not this
-facade crate.
+If `container(...)` is omitted, ATRAC1 defaults to AEA, ATRAC3 defaults to
+OMA, and ATRAC3plus defaults to OMA. Filename extension inference is handled by
+`atracdenc-cli`, not this facade crate.
 
 Supported combinations:
 
@@ -201,3 +202,4 @@ Supported combinations:
 |---|---|
 | `Codec::Atrac1` | `Container::Aea`, `Container::Raw` |
 | `Codec::Atrac3`, `Codec::Atrac3Lp4` | `Container::Oma`, `Container::Riff`, `Container::Rm`, `Container::Raw` |
+| `Codec::Atrac3plus` | `Container::Oma`, `Container::Riff`, `Container::Raw` |

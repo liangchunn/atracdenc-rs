@@ -18,15 +18,14 @@
 //! This is a faithful, line-for-line port; Clippy style lints that would
 //! obscure the correspondence with the C reference (index loops, explicit
 //! `dim * 0/1/2` matrix offsets, manual copies) are allowed module-wide.
+
 #![allow(
     clippy::needless_range_loop,
     clippy::manual_memcpy,
-    clippy::manual_swap,
     clippy::identity_op,
     clippy::erasing_op,
     clippy::collapsible_if,
-    clippy::manual_is_multiple_of,
-    clippy::too_many_arguments
+    clippy::manual_is_multiple_of
 )]
 
 pub mod sle;

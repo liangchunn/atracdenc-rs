@@ -60,8 +60,11 @@ ATRAC3 decode is not yet implemented (only ATRAC1 decode support).
 
 ## Test data
 
-`*.wav` and `*.aea` files in the repo root are gitignored. Integration tests
-generate synthetic WAVs in temp dirs — no committed test fixtures needed.
+`*.wav` and `*.aea` files in the repo root are gitignored. Most integration
+tests generate synthetic WAVs in temp dirs. The one committed fixture is
+`crates/atracdenc/tests/fixtures/impulse.wav` (un-ignored via a `.gitignore`
+negation), used by the Sony decode-delay alignment tests
+(`crates/atracdenc/tests/sony_delay_align.rs`).
 
 ## Cross-validation
 

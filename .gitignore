@@ -1,4 +1,16 @@
 /target
 *.aea
 *.wav
+*.at3
+*.oma
+*.omg
+*.rm
 .DS_Store
+
+# Local-only nested git clones (not part of this repo): the C++ reference
+# build and the separate at3rs project that hosts the Sony codec tool.
+/atracdenc/
+/at3rs/
+
+# Committed test fixtures (override the *.wav ignore above)
+!/crates/atracdenc/tests/fixtures/impulse.wav

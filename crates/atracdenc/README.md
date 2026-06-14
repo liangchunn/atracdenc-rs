@@ -190,6 +190,40 @@ fn main() -> atracdenc::Result<()> {
 }
 ```
 
+## Sony decode-delay alignment (ATRAC3 LP2 / LP4)
+
+Set `At3Settings::sony_delay_align` so the encoded stream reproduces the original
+PCM at **zero sample delay and exact length** when decoded by Sony's reference
+decoder (MiniDisc / NetMD hardware, or `at3tool`). Without it (the default,
+C++-reference-compatible behavior), Sony's decoder reproduces the audio 69
+samples late and slightly clipped at the tail — the ATRAC3 encoder delay.
+
+This option is supported for the standard MiniDisc modes — **ATRAC3 LP2
+(`Codec::Atrac3`) and LP4 (`Codec::Atrac3Lp4`), stereo, into the RIFF/AT3
+container**. It returns an error for mono input, other containers, non-LP2/LP4
+bitrates, or non-ATRAC3 codecs. Default output is unaffected. See
+`docs/sony-delay-alignment.md` for the background.
+
+```rust
+use atracdenc::{At3Settings, Codec, Container, EncodeBuilder};
+
+fn main() -> atracdenc::Result<()> {
+    let wav_bytes = std::fs::read("input.wav")?; // 44.1 kHz / 16-bit / stereo
+    let bytes = EncodeBuilder::new()
+        .codec(Codec::Atrac3) // or Codec::Atrac3Lp4 for LP4
+        .input_bytes(wav_bytes)
+        .container(Container::Riff)
+        .at3_settings(At3Settings {
+            sony_delay_align: true,
+            ..At3Settings::default()
+        })
+        .run_to_vec()?;
+
+    std::fs::write("aligned.at3", bytes)?;
+    Ok(())
+}
+```
+
 ## Containers
 
 If `container(...)` is omitted, ATRAC1 defaults to AEA, ATRAC3 defaults to

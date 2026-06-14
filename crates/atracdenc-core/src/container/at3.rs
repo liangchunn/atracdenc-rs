@@ -24,6 +24,7 @@ pub struct At3Output<W: Write + Seek> {
     frame_size: u32,
     frames_written: u64,
     channels: usize,
+    fact_samples: Option<u32>,
 }
 
 impl<W: Write + Seek> At3Output<W> {
@@ -71,6 +72,7 @@ impl<W: Write + Seek> At3Output<W> {
             frame_size,
             frames_written: 0,
             channels,
+            fact_samples: None,
         })
     }
 
@@ -116,7 +118,16 @@ impl<W: Write + Seek> At3Output<W> {
             frame_size,
             frames_written: 0,
             channels,
+            fact_samples: None,
         })
+    }
+
+    /// Override the `fact` chunk's "total samples" value with the true PCM
+    /// sample count (per channel), instead of the frame-aligned default. Used
+    /// for Sony decode-delay alignment so the reference decoder emits exactly
+    /// the original number of samples.
+    pub fn set_fact_samples(&mut self, samples: u32) {
+        self.fact_samples = Some(samples);
     }
 
     pub fn finalize(&mut self) -> Result<(), ContainerError> {
@@ -129,15 +140,14 @@ impl<W: Write + Seek> At3Output<W> {
         if actual_file_size >= u64::from(u32::MAX) {
             return Ok(());
         }
+        let fact_value = self
+            .fact_samples
+            .unwrap_or(self.frames_written as u32 * samples_per_frame);
         let Some(inner) = &mut self.inner else {
             return Ok(());
         };
         patch_u32(inner, 4, (actual_file_size - 8) as u32)?;
-        patch_u32(
-            inner,
-            total_offset,
-            self.frames_written as u32 * samples_per_frame,
-        )?;
+        patch_u32(inner, total_offset, fact_value)?;
         patch_u32(
             inner,
             data_offset,

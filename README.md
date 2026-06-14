@@ -3,6 +3,8 @@
 A free LGPL implementation of ATRAC1, ATRAC3, and ATRAC3plus encoders, ported
 from C++ to Rust.
 
+ATRAC, ATRAC3, ATRAC3plus, and their logos are trademarks of Sony Corporation.
+
 **Original C++ reference:** <https://github.com/dcherednik/atracdenc>  
 **Ported from commit:** [`01234b0`][upstream-commit] ("Add explicit container selection")
 
@@ -75,6 +77,9 @@ atracdenc -e atrac3plus --advanced ghadbg=0 -i input.wav -o output.oma
 # Explicit container override
 atracdenc -e atrac3 --container riff -i input.wav -o output.at3
 
+# ATRAC3 aligned for Sony hardware playback (MiniDisc/NetMD): lag-0, exact length
+atracdenc -e atrac3 --container riff --sony-delay-align -i input.wav -o output.at3
+
 # Custom bitrate (ATRAC3 only, 32–384 kbps)
 atracdenc -e atrac3 --bitrate 192 -i input.wav -o out.oma
 
@@ -96,6 +101,32 @@ from AEA input. ATRAC3 uses fast BFU allocation by default; use
 `--at3-bfu-mode parity` when comparing encoder output against the C++
 reference. ATRAC3plus uses GHA-based tonal analysis; pass
 `--advanced ghadbg=<mask>` to control GHA processing flags.
+
+## Sony decode-delay alignment
+
+By default (matching the C++ reference), ATRAC3 output decoded by Sony's
+reference decoder — including MiniDisc / NetMD hardware and Sony's `at3tool` —
+plays back 69 samples late and slightly clipped at the tail. This is the
+ATRAC3 encoder delay, not a bug, and is inaudible for most uses.
+
+The opt-in `--sony-delay-align` flag makes the output reproduce the original PCM
+at **zero sample delay and exact length** through Sony's decoder, so
+atracdenc-encoded tracks behave identically to Sony-encoded ones on hardware.
+It is supported for the standard MiniDisc modes — **ATRAC3 LP2 and LP4, stereo,
+RIFF/AT3** output — and leaves default (non-aligned) output byte-identical.
+
+```bash
+# LP2 (~132 kbps)
+atracdenc -e atrac3 --container riff --sony-delay-align -i input.wav -o output.at3
+
+# LP4 (~66 kbps)
+atracdenc -e atrac3-lp4 --container riff --sony-delay-align -i input.wav -o output.at3
+```
+
+See [`docs/sony-delay-alignment.md`](docs/sony-delay-alignment.md) for the full
+investigation, the reverse engineering of Sony's `psp_at3tool.exe`, and the
+implementation details.
+
 
 ## Building
 

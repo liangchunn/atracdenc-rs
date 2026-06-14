@@ -11,7 +11,10 @@ use atracdenc_core::{
         data::{EncodeSettings as CoreAt1Settings, WindowMode},
     },
     at3::{
-        data::{BfuAllocMode as CoreBfuAllocMode, EncodeSettings as CoreAt3Settings, LP4},
+        data::{
+            BfuAllocMode as CoreBfuAllocMode, EncodeSettings as CoreAt3Settings, LP2, LP4,
+            params_for_bitrate,
+        },
         encoder::Atrac3Encoder,
     },
     at3p::encoder::{At3pEncoder, At3pSettings, parse_advanced_opt},
@@ -24,7 +27,7 @@ use atracdenc_core::{
         rm::RmOutput,
     },
     pcm::{
-        engine::{PcmEngine, PcmEngineError, Processor},
+        engine::{PcmBuffer, PcmEngine, PcmEngineError, PcmReader, Processor},
         wav::{WavReader, WavWriter},
     },
 };
@@ -119,6 +122,11 @@ pub struct At3Settings {
     pub bfu_idx_const: u32,
     pub bfu_mode: At3BfuMode,
     pub bfu_idx_fast: bool,
+    /// When set, align the encoded ATRAC3 stream so that Sony's reference
+    /// decoder (e.g. MiniDisc hardware / at3tool) reproduces the original
+    /// PCM with zero sample delay and exact length. Currently supported only
+    /// for ATRAC3 LP2 stereo into a RIFF/AT3 container.
+    pub sony_delay_align: bool,
 }
 
 impl Default for At3Settings {
@@ -130,6 +138,7 @@ impl Default for At3Settings {
             bfu_idx_const: 0,
             bfu_mode: At3BfuMode::Fast,
             bfu_idx_fast: false,
+            sony_delay_align: false,
         }
     }
 }
@@ -327,7 +336,7 @@ fn encode(mut builder: EncodeBuilder) -> Result<EncodedOutput> {
     debug!(
         "validated WAV input: channels={channels}, sample_rate={sample_rate}, bits_per_sample={bits_per_sample}, total_samples={total_samples}"
     );
-    let frame_count = encoded_frame_count(total_samples, builder.codec)?;
+    let mut frame_count = encoded_frame_count(total_samples, builder.codec)?;
 
     let output = builder
         .output
@@ -338,6 +347,37 @@ fn encode(mut builder: EncodeBuilder) -> Result<EncodedOutput> {
         (None, EncodeOutput::Writer(_) | EncodeOutput::Vec) => default_container(builder.codec),
     };
     validate_container(builder.codec, container)?;
+
+    // Sony decode-delay alignment (opt-in, ATRAC3 LP2/LP4 stereo + RIFF only).
+    // Codec/bitrate (LP2 or LP4) are already validated in
+    // validate_encode_settings; here we additionally require the runtime-resolved
+    // container and channel count. Reverse-engineered from psp_at3tool.exe: the
+    // ATRAC3 encoder delay is 69 samples (0x45) and Sony's decoder trims
+    // 1024 + 69 = 1093 samples (verified for both LP2 and LP4).
+    let align =
+        matches!(builder.codec, Codec::Atrac3 | Codec::Atrac3Lp4) && builder.at3.sony_delay_align;
+    let mut fact_samples: Option<u32> = None;
+    if align {
+        if container != Container::Riff {
+            return Err(invalid_input(
+                "--sony-delay-align is only supported with the riff/at3 container",
+            ));
+        }
+        if channels != 2 {
+            return Err(invalid_input(
+                "--sony-delay-align is only supported for stereo ATRAC3 (LP2/LP4)",
+            ));
+        }
+        let aligned_frames = total_samples
+            .saturating_add(u64::from(ATRAC3_DECODER_DELAY))
+            .div_ceil(ATRAC3_FRAME_SAMPLES);
+        frame_count = u32::try_from(aligned_frames)
+            .map_err(|_| invalid_input("input is too long for container metadata"))?;
+        fact_samples = Some(
+            u32::try_from(total_samples)
+                .map_err(|_| invalid_input("input is too long for container metadata"))?,
+        );
+    }
     debug!(
         "selected encode container: codec={}, container={}, frame_count={frame_count}",
         codec_name(builder.codec),
@@ -362,6 +402,7 @@ fn encode(mut builder: EncodeBuilder) -> Result<EncodedOutput> {
             channels,
             sample_rate,
             frame_count,
+            fact_samples,
         )?,
         EncodeOutput::Vec => {
             let shared = SharedCursor::default();
@@ -373,13 +414,25 @@ fn encode(mut builder: EncodeBuilder) -> Result<EncodedOutput> {
                 channels,
                 sample_rate,
                 frame_count,
+                fact_samples,
             )?
         }
+    };
+    let pcm_reader: Box<dyn PcmReader> = if align {
+        Box::new(AlignedReader::new(
+            reader,
+            channels,
+            ATRAC3_FRAME_SAMPLES as usize,
+            ATRAC3_ENCODER_DELAY as usize,
+            frame_count,
+        ))
+    } else {
+        Box::new(reader)
     };
     let mut engine = PcmEngine::new(
         frame_samples(builder.codec),
         channels,
-        Some(Box::new(reader)),
+        Some(pcm_reader),
         None,
     );
     let mut progress = ProgressLogger::new(total_samples);
@@ -486,6 +539,103 @@ fn open_aea_input(input: DecodeInput) -> Result<AeaInput<Box<dyn ReadSeek>>> {
     }
 }
 
+/// ATRAC3 codec constants reverse-engineered from Sony's psp_at3tool.exe.
+/// `FUN_004039e0` returns 0x45 (69) as the ATRAC3 encoder delay, and the
+/// reference decoder trims one frame plus that delay (1024 + 69 = 1093).
+const ATRAC3_FRAME_SAMPLES: u64 = 1024;
+const ATRAC3_ENCODER_DELAY: u32 = 69;
+const ATRAC3_DECODER_DELAY: u32 = 1024 + ATRAC3_ENCODER_DELAY;
+
+/// PCM reader adapter for Sony decode-delay alignment. It advances the input
+/// by `skip_per_ch` samples (the encoder delay) so the decoded output lines up
+/// at lag 0, and feeds exactly `target_frames` frames (zero-padding the tail)
+/// so the decoder's trim never clips real audio.
+struct AlignedReader<R: PcmReader> {
+    inner: R,
+    channels: usize,
+    frame_samples: usize,
+    skip_left: usize,
+    served_frames: u32,
+    target_frames: u32,
+    scratch: PcmBuffer,
+    carry: std::collections::VecDeque<f32>,
+    inner_eof: bool,
+}
+
+impl<R: PcmReader> AlignedReader<R> {
+    fn new(
+        inner: R,
+        channels: usize,
+        frame_samples: usize,
+        skip_per_ch: usize,
+        target_frames: u32,
+    ) -> Self {
+        Self {
+            inner,
+            channels,
+            frame_samples,
+            skip_left: skip_per_ch * channels,
+            served_frames: 0,
+            target_frames,
+            scratch: PcmBuffer::new(frame_samples, channels),
+            carry: std::collections::VecDeque::new(),
+            inner_eof: false,
+        }
+    }
+
+    fn refill(&mut self) -> std::result::Result<(), AtracdencError> {
+        if self.inner_eof {
+            return Ok(());
+        }
+        let ok = self
+            .inner
+            .read(&mut self.scratch, self.frame_samples as u32)?;
+        if !ok {
+            self.inner_eof = true;
+            return Ok(());
+        }
+        let samples = self.scratch.samples();
+        let mut start = 0;
+        if self.skip_left > 0 {
+            let drop = self.skip_left.min(samples.len());
+            self.skip_left -= drop;
+            start = drop;
+        }
+        self.carry.extend(samples[start..].iter().copied());
+        Ok(())
+    }
+
+    fn next_sample(&mut self) -> std::result::Result<f32, AtracdencError> {
+        loop {
+            if let Some(s) = self.carry.pop_front() {
+                return Ok(s);
+            }
+            if self.inner_eof {
+                return Ok(0.0);
+            }
+            self.refill()?;
+        }
+    }
+}
+
+impl<R: PcmReader> PcmReader for AlignedReader<R> {
+    fn read(
+        &mut self,
+        data: &mut PcmBuffer,
+        size: u32,
+    ) -> std::result::Result<bool, AtracdencError> {
+        if self.served_frames >= self.target_frames {
+            return Ok(false);
+        }
+        let need = size as usize * self.channels;
+        for slot in &mut data.samples_mut()[..need] {
+            *slot = self.next_sample()?;
+        }
+        self.served_frames += 1;
+        Ok(true)
+    }
+}
+
 fn build_seek_encoder<W>(
     builder: &mut EncodeBuilder,
     output: W,
@@ -493,6 +643,7 @@ fn build_seek_encoder<W>(
     channels: usize,
     sample_rate: u32,
     frame_count: u32,
+    fact_samples: Option<u32>,
 ) -> Result<Box<dyn Processor>>
 where
     W: Write + Seek + 'static,
@@ -531,6 +682,7 @@ where
                 sample_rate,
                 frame_count,
                 settings,
+                fact_samples,
             )?;
             build_atrac3_encoder(output, settings, builder.yaml_log.take())
         }
@@ -576,10 +728,7 @@ fn build_atrac3_encoder(
 }
 
 fn build_atrac3_settings(builder: &EncodeBuilder, channels: usize) -> Result<CoreAt3Settings> {
-    let bitrate = match (builder.codec, builder.at3.bitrate_kbps) {
-        (Codec::Atrac3Lp4, None) => LP4.bitrate,
-        (_, bitrate) => bitrate.unwrap_or(0) * 1024,
-    };
+    let bitrate = resolve_atrac3_bitrate(builder.codec, builder.at3.bitrate_kbps);
     let mut settings = CoreAt3Settings::new(
         bitrate,
         builder.at3.no_gain_control,
@@ -590,6 +739,16 @@ fn build_atrac3_settings(builder: &EncodeBuilder, channels: usize) -> Result<Cor
     .ok_or_else(|| invalid_input("unsupported ATRAC3 bitrate"))?;
     settings.bfu_alloc_mode = builder.at3.bfu_mode.into();
     Ok(settings)
+}
+
+/// Resolve the requested ATRAC3 bitrate (in bps) the same way for validation and
+/// encoding: `Codec::Atrac3Lp4` defaults to the LP4 rate, otherwise the kbps
+/// request (or 0 for "default", which `params_for_bitrate` maps to LP2).
+fn resolve_atrac3_bitrate(codec: Codec, bitrate_kbps: Option<u32>) -> u32 {
+    match (codec, bitrate_kbps) {
+        (Codec::Atrac3Lp4, None) => LP4.bitrate,
+        (_, bitrate) => bitrate.unwrap_or(0).saturating_mul(1024),
+    }
 }
 
 fn build_atrac1_output<W>(
@@ -624,6 +783,7 @@ fn build_atrac3_output<W>(
     sample_rate: u32,
     frame_count: u32,
     settings: CoreAt3Settings,
+    fact_samples: Option<u32>,
 ) -> Result<Box<dyn CompressedOutput>>
 where
     W: Write + Seek + 'static,
@@ -644,13 +804,19 @@ where
                 params.frame_sz as u32,
             )?))
         }
-        Container::Riff => Ok(Box::new(At3Output::atrac3(
-            output,
-            2,
-            frame_count,
-            params.frame_sz as u32,
-            params.joint_stereo,
-        )?)),
+        Container::Riff => {
+            let mut riff = At3Output::atrac3(
+                output,
+                2,
+                frame_count,
+                params.frame_sz as u32,
+                params.joint_stereo,
+            )?;
+            if let Some(samples) = fact_samples {
+                riff.set_fact_samples(samples);
+            }
+            Ok(Box::new(riff))
+        }
         Container::Rm => Ok(Box::new(RmOutput::new(
             output,
             channels,
@@ -754,6 +920,27 @@ fn validate_encode_settings(builder: &EncodeBuilder) -> Result<()> {
         return Err(invalid_input(
             "--bfuidxfast cannot be combined with --at3-bfu-mode parity",
         ));
+    }
+    if builder.at3.sony_delay_align {
+        // The 69-sample ATRAC3 encoder delay is a QMF group delay, identical
+        // across frame formats. Sony's decoder only accepts the standard MiniDisc
+        // modes though, so alignment is supported for LP2 and LP4 (both verified
+        // against at3tool); other bitrates are rejected rather than silently
+        // producing unaligned (and often un-decodable) output.
+        if !matches!(builder.codec, Codec::Atrac3 | Codec::Atrac3Lp4) {
+            return Err(invalid_input(
+                "--sony-delay-align is only supported for atrac3 lp2/lp4",
+            ));
+        }
+        let params = params_for_bitrate(resolve_atrac3_bitrate(
+            builder.codec,
+            builder.at3.bitrate_kbps,
+        ));
+        if params != Some(LP2) && params != Some(LP4) {
+            return Err(invalid_input(
+                "--sony-delay-align is only supported for atrac3 lp2/lp4 (omit --bitrate)",
+            ));
+        }
     }
     if builder.codec == Codec::Atrac1
         && builder.at1.bfu_idx_const > atracdenc_core::at1::data::MAX_BFU_IDX_CONST
@@ -1210,5 +1397,159 @@ mod tests {
             .unwrap_err();
 
         assert_eq!("invalid input: missing output file", err.to_string());
+    }
+
+    fn wav_bytes_stereo(frames: usize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let data_len = frames as u32 * 2 * 2; // 2 channels, 16-bit
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&44_100_u32.to_le_bytes());
+        bytes.extend_from_slice(&(44_100_u32 * 4).to_le_bytes());
+        bytes.extend_from_slice(&4_u16.to_le_bytes());
+        bytes.extend_from_slice(&16_u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        for i in 0..frames {
+            let phase = 2.0 * std::f64::consts::PI * 440.0 * i as f64 / 44_100.0;
+            let sample = (phase.sin() * 8000.0) as i16;
+            bytes.extend_from_slice(&sample.to_le_bytes());
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn sony_delay_align_sets_fact_to_true_samples_and_flush_frame_count() {
+        let total_samples: usize = 5000; // not frame-aligned
+        let bytes = EncodeBuilder::new()
+            .input_bytes(wav_bytes_stereo(total_samples))
+            .codec(Codec::Atrac3)
+            .container(Container::Riff)
+            .at3_settings(At3Settings {
+                sony_delay_align: true,
+                ..At3Settings::default()
+            })
+            .run_to_vec()
+            .unwrap();
+
+        // fact (per-channel sample count) lives at offset 60 in the AT3 header.
+        let fact = u32::from_le_bytes(bytes[60..64].try_into().unwrap());
+        assert_eq!(
+            fact, total_samples as u32,
+            "fact must equal true sample count"
+        );
+
+        // data chunk size at offset 72; frames = data / frame_sz (LP2 = 384).
+        let data_size = u32::from_le_bytes(bytes[72..76].try_into().unwrap());
+        let frames = data_size / 384;
+        let expected = ((total_samples as u64 + 1093).div_ceil(1024)) as u32;
+        assert_eq!(
+            frames, expected,
+            "frame count must include the codec-delay flush"
+        );
+    }
+
+    #[test]
+    fn sony_delay_align_rejects_mono() {
+        let err = EncodeBuilder::new()
+            .input_bytes(wav_bytes(2048))
+            .codec(Codec::Atrac3)
+            .container(Container::Riff)
+            .at3_settings(At3Settings {
+                sony_delay_align: true,
+                ..At3Settings::default()
+            })
+            .run_to_vec()
+            .unwrap_err();
+        assert_eq!(
+            "invalid input: --sony-delay-align is only supported for stereo ATRAC3 (LP2/LP4)",
+            err.to_string()
+        );
+    }
+
+    #[test]
+    fn sony_delay_align_rejects_non_riff_container() {
+        let err = EncodeBuilder::new()
+            .input_bytes(wav_bytes_stereo(2048))
+            .codec(Codec::Atrac3)
+            .container(Container::Oma)
+            .at3_settings(At3Settings {
+                sony_delay_align: true,
+                ..At3Settings::default()
+            })
+            .run_to_vec()
+            .unwrap_err();
+        assert_eq!(
+            "invalid input: --sony-delay-align is only supported with the riff/at3 container",
+            err.to_string()
+        );
+    }
+
+    #[test]
+    fn sony_delay_align_rejects_non_atrac3_codec() {
+        for codec in [Codec::Atrac1, Codec::Atrac3plus] {
+            let err = EncodeBuilder::new()
+                .input_bytes(wav_bytes_stereo(2048))
+                .codec(codec)
+                .container(Container::Riff)
+                .at3_settings(At3Settings {
+                    sony_delay_align: true,
+                    ..At3Settings::default()
+                })
+                .run_to_vec()
+                .unwrap_err();
+            assert_eq!(
+                "invalid input: --sony-delay-align is only supported for atrac3 lp2/lp4",
+                err.to_string(),
+                "codec {codec:?} should reject sony_delay_align"
+            );
+        }
+    }
+
+    #[test]
+    fn sony_delay_align_lp4_sets_fact_and_flush_frame_count() {
+        let total_samples: usize = 5000; // not frame-aligned
+        let bytes = EncodeBuilder::new()
+            .input_bytes(wav_bytes_stereo(total_samples))
+            .codec(Codec::Atrac3Lp4)
+            .container(Container::Riff)
+            .at3_settings(At3Settings {
+                sony_delay_align: true,
+                ..At3Settings::default()
+            })
+            .run_to_vec()
+            .unwrap();
+
+        // LP4 frame size is 192 bytes; fact still carries the true sample count.
+        let fact = u32::from_le_bytes(bytes[60..64].try_into().unwrap());
+        assert_eq!(fact, total_samples as u32);
+        let data_size = u32::from_le_bytes(bytes[72..76].try_into().unwrap());
+        let frames = data_size / 192;
+        let expected = ((total_samples as u64 + 1093).div_ceil(1024)) as u32;
+        assert_eq!(frames, expected, "LP4 uses the same codec-delay flush");
+    }
+
+    #[test]
+    fn sony_delay_align_rejects_non_lp2_lp4_bitrate() {
+        let err = EncodeBuilder::new()
+            .input_bytes(wav_bytes_stereo(2048))
+            .codec(Codec::Atrac3)
+            .container(Container::Riff)
+            .at3_settings(At3Settings {
+                sony_delay_align: true,
+                bitrate_kbps: Some(192),
+                ..At3Settings::default()
+            })
+            .run_to_vec()
+            .unwrap_err();
+        assert_eq!(
+            "invalid input: --sony-delay-align is only supported for atrac3 lp2/lp4 (omit --bitrate)",
+            err.to_string()
+        );
     }
 }

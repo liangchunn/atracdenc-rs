@@ -9,16 +9,13 @@
 //! explicit `dim * 0/1/2` matrix offsets, and manual copies/swaps would obscure
 //! the correspondence with the reference and risk regressions in code that is
 //! verified bit/index-exact by tests.
+
 #![allow(
     clippy::needless_range_loop,
-    clippy::manual_memcpy,
     clippy::manual_swap,
-    clippy::identity_op,
-    clippy::erasing_op,
     clippy::collapsible_if,
     clippy::implicit_saturating_sub,
     clippy::derivable_impls,
-    clippy::too_many_arguments,
     clippy::excessive_precision
 )]
 

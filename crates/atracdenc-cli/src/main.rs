@@ -51,6 +51,10 @@ struct CliOptions {
     bfu_idx_fast: bool,
     #[arg(long = "at3-bfu-mode", value_enum, default_value = "fast")]
     at3_bfu_mode: At3BfuMode,
+    #[arg(long = "sony-delay-align")]
+    /// Align ATRAC3 output so Sony's decoder (e.g. MiniDisc/at3tool) reproduces
+    /// the input at zero delay and exact length. ATRAC3 LP2/LP4 stereo + RIFF only.
+    sony_delay_align: bool,
     #[arg(long = "notransient", num_args = 0..=1, require_equals = true, default_missing_value = "0")]
     no_transient: Option<u32>,
     #[arg(long = "notonal", alias = "no-tonal-components")]
@@ -194,6 +198,7 @@ fn encode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
             bfu_idx_const: opts.bfu_idx_const,
             bfu_mode: opts.at3_bfu_mode.into(),
             bfu_idx_fast: opts.bfu_idx_fast,
+            sony_delay_align: opts.sony_delay_align,
         });
 
     if let Some(advanced) = opts.advanced.as_ref() {

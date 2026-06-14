@@ -42,7 +42,7 @@ cargo install samply
 cargo build --profile profiling
 samply record -r 4000 --iteration-count 40 --unstable-presymbolicate -s -n \
   -o /tmp/at1.profile.json.gz -- \
-  target/profiling/atracdenc -d -i in.aea -o out.wav --nostdout
+  env RUST_LOG=off target/profiling/atracdenc -d -i in.aea -o out.wav
 samply load /tmp/at1.profile.json.gz   # opens the Firefox Profiler UI
 ```
 

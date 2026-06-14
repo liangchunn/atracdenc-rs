@@ -20,6 +20,7 @@ use crate::{
     pcm::engine::{ProcessMeta, ProcessResult, Processor},
     util::inverted_spectr,
 };
+use log::{debug, trace};
 
 const LOUD_FACTOR: f32 = 0.006;
 
@@ -59,6 +60,10 @@ impl Atrac1Encoder {
 
     pub fn new(output: Box<dyn CompressedOutput>, settings: EncodeSettings) -> Self {
         let channels = output.channels().max(1);
+        debug!(
+            "creating ATRAC1 encoder: channels={channels}, bfu_idx_const={}, window_mode={:?}, window_mask={}",
+            settings.bfu_idx_const, settings.window_mode, settings.window_mask
+        );
         Self {
             output,
             settings,
@@ -161,6 +166,11 @@ impl Processor for Atrac1Encoder {
             self.loudness = track_loudness_mono(self.loudness, channel_loudness[0]);
         }
 
+        trace!(
+            "ATRAC1 encode frame: channels={channels}, window_masks={window_masks:?}, channel_loudness={channel_loudness:?}, tracked_loudness={:.6}",
+            self.loudness / LOUD_FACTOR
+        );
+
         for channel in 0..channels {
             let scaled_blocks =
                 scale_at1_frame(&self.scaler, &channel_specs[channel], &block_sizes[channel]);
@@ -192,6 +202,11 @@ pub struct Atrac1Decoder {
 impl Atrac1Decoder {
     pub fn new(input: Box<dyn CompressedInput>) -> Self {
         let channels = input.channels().max(1);
+        debug!(
+            "creating ATRAC1 decoder: channels={channels}, frame_size={}, length_in_samples={}",
+            input.frame_size(),
+            input.length_in_samples()
+        );
         Self {
             input,
             mdct: Atrac1Mdct::new(),
@@ -226,6 +241,9 @@ impl Processor for Atrac1Decoder {
             let frame = match self.input.read_frame()? {
                 Some(frame) => frame,
                 None => {
+                    trace!(
+                        "ATRAC1 decode frame: missing compressed frame for channel={channel}; filling silence"
+                    );
                     // The original atracdenc decode loop processes whole engine
                     // blocks, which can round the requested output length up past
                     // the last physical AEA frame. Emit silence for the missing
@@ -238,6 +256,7 @@ impl Processor for Atrac1Decoder {
             };
             let mut bitstream = BitStream::from_bytes(&frame);
             let mode = BlockSizeMod::parse(&mut bitstream);
+            trace!("ATRAC1 decode channel={channel}: block_size={mode:?}");
             let specs = &mut self.specs_buf[channel];
             specs.fill(0.0);
             Atrac1Dequantiser::new().dequant(&mut bitstream, &mode, specs);

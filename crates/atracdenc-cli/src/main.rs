@@ -53,9 +53,6 @@ struct CliOptions {
     at3_bfu_mode: At3BfuMode,
     #[arg(long = "notransient", num_args = 0..=1, require_equals = true, default_missing_value = "0")]
     no_transient: Option<u32>,
-    #[arg(long = "nostdout", hide = true)]
-    /// not implemented
-    no_stdout: bool,
     #[arg(long = "notonal", alias = "no-tonal-components")]
     no_tonal_components: bool,
     #[arg(long = "nogaincontrol", alias = "no-gain-control")]
@@ -124,7 +121,9 @@ impl From<At3BfuMode> for atracdenc::At3BfuMode {
 }
 
 fn main() {
-    if let Err(err) = run(Cli::parse()) {
+    let cli = Cli::parse();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    if let Err(err) = run(cli) {
         eprintln!("error: {err}");
         std::process::exit(1);
     }
@@ -166,6 +165,8 @@ fn encode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
         .container
         .map(atracdenc::Container::from)
         .unwrap_or_else(|| infer_container(&output, codec_api));
+    log::info!("Input file: {}", input.display());
+    log::info!("Output file: {}", output.display());
 
     let mut builder = atracdenc::EncodeBuilder::new()
         .codec(codec_api)
@@ -240,6 +241,8 @@ fn decode(opts: CliOptions) -> Result<(), Box<dyn Error>> {
             input.display()
         ))
     })?;
+    log::info!("Input file: {}", input.display());
+    log::info!("Output file: {}", output.display());
 
     let mut builder = atracdenc::DecodeBuilder::new()
         .codec(codec.into())
@@ -381,7 +384,6 @@ mod tests {
             "gain.yaml",
             "--at3-bfu-mode",
             "parity",
-            "--nostdout",
         ])
         .unwrap();
 

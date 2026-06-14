@@ -221,7 +221,7 @@ error handling strategy.
 ### 4.2 Progress output — mostly absent in Rust
 
 C++ prints a startup banner (channels, sample rate, duration, codec, container,
-bitrate) and per-frame progress when `--nostdout` is not set.  Rust does not
+bitrate) and per-frame progress unless logging is disabled.  Rust does not
 print startup/progress output.  `--bfuidxfast` remains accepted for compatibility
 and is effectively the default ATRAC3 allocation mode.
 

@@ -27,6 +27,7 @@ use atracdenc_core::{
         wav::{WavReader, WavWriter},
     },
 };
+use log::{debug, info};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -310,9 +311,14 @@ fn encode(mut builder: EncodeBuilder) -> Result<EncodedOutput> {
     let reader = open_wav_reader(input)?;
     let channels = usize::from(reader.channels());
     let sample_rate = reader.sample_rate();
+    let bits_per_sample = reader.bits_per_sample();
+    let total_samples = reader.total_samples();
 
     validate_wav(&reader)?;
-    let frame_count = encoded_frame_count(reader.total_samples(), builder.codec)?;
+    debug!(
+        "validated WAV input: channels={channels}, sample_rate={sample_rate}, bits_per_sample={bits_per_sample}, total_samples={total_samples}"
+    );
+    let frame_count = encoded_frame_count(total_samples, builder.codec)?;
 
     let output = builder
         .output
@@ -323,9 +329,23 @@ fn encode(mut builder: EncodeBuilder) -> Result<EncodedOutput> {
         (None, EncodeOutput::Writer(_) | EncodeOutput::Vec) => default_container(builder.codec),
     };
     validate_container(builder.codec, container)?;
+    debug!(
+        "selected encode container: codec={}, container={}, frame_count={frame_count}",
+        codec_name(builder.codec),
+        container_name(container)
+    );
     if builder.codec == Codec::Atrac3plus {
         return Err(invalid_input("ATRAC3plus encoding is not ported yet"));
     }
+
+    log_encode_summary(
+        builder.codec,
+        container,
+        channels,
+        sample_rate,
+        total_samples,
+        frame_count,
+    );
 
     let mut vec_output = None;
     let mut processor = match output {
@@ -356,14 +376,17 @@ fn encode(mut builder: EncodeBuilder) -> Result<EncodedOutput> {
         Some(Box::new(reader)),
         None,
     );
+    let mut progress = ProgressLogger::new(total_samples);
+    progress.record(0);
 
     loop {
         match engine.apply_process(frame_samples(builder.codec), processor.as_mut()) {
-            Ok(_) => {}
+            Ok(processed) => progress.record(processed),
             Err(AtracdencError::PcmEngine(PcmEngineError::NoDataToRead)) => break,
             Err(err) => return Err(err.into()),
         }
     }
+    progress.finish();
     drop(processor);
 
     if let Some(output) = vec_output {
@@ -396,6 +419,12 @@ fn decode(mut builder: DecodeBuilder) -> Result<DecodedOutput> {
     let channels = input.channels().max(1);
     const DECODE_BUFFER_SAMPLES: usize = 4096;
     let total_samples = input.length_in_samples();
+    debug!(
+        "opened AEA input: name={}, channels={channels}, frame_size={}, total_samples={total_samples}",
+        input.name(),
+        input.frame_size()
+    );
+    log_decode_summary(input.name(), channels, total_samples);
 
     let mut vec_output = None;
     let writer: Box<dyn atracdenc_core::pcm::engine::PcmWriter> = match output {
@@ -416,12 +445,18 @@ fn decode(mut builder: DecodeBuilder) -> Result<DecodedOutput> {
     let mut decoder = Atrac1Decoder::new(Box::new(input));
 
     let mut processed = 0_u64;
+    let mut progress = ProgressLogger::new(total_samples);
+    progress.record(0);
     while total_samples > processed {
         match engine.apply_process(atracdenc_core::at1::data::NUM_SAMPLES, &mut decoder) {
-            Ok(p) => processed = p,
+            Ok(p) => {
+                processed = p;
+                progress.record(processed);
+            }
             Err(err) => return Err(err.into()),
         }
     }
+    progress.finish();
 
     drop(engine);
 
@@ -457,12 +492,32 @@ where
     W: Write + Seek + 'static,
 {
     match builder.codec {
-        Codec::Atrac1 => build_atrac1_encoder(
-            builder,
-            build_atrac1_output(output, container, channels, frame_count)?,
-        ),
+        Codec::Atrac1 => {
+            debug!(
+                "building ATRAC1 encoder: container={}, channels={channels}, frame_count={frame_count}",
+                container_name(container)
+            );
+            build_atrac1_encoder(
+                builder,
+                build_atrac1_output(output, container, channels, frame_count)?,
+            )
+        }
         Codec::Atrac3 | Codec::Atrac3Lp4 => {
             let settings = build_atrac3_settings(builder, channels)?;
+            info!(
+                "ATRAC3 settings: bitrate={} bps, frame_size={} bytes, joint_stereo={}",
+                settings.container_params.bitrate,
+                settings.container_params.frame_sz,
+                settings.container_params.joint_stereo
+            );
+            debug!(
+                "building ATRAC3 encoder: container={}, channels={channels}, sample_rate={sample_rate}, frame_count={frame_count}, no_gain_control={}, no_tonal_components={}, bfu_idx_const={}, bfu_mode={:?}",
+                container_name(container),
+                settings.no_gain_control,
+                settings.no_tonal_components,
+                settings.bfu_idx_const,
+                settings.bfu_alloc_mode
+            );
             let output = build_atrac3_output(
                 output,
                 container,
@@ -698,6 +753,99 @@ fn frame_samples(codec: Codec) -> usize {
         Codec::Atrac1 => atracdenc_core::at1::data::NUM_SAMPLES,
         Codec::Atrac3 | Codec::Atrac3Lp4 => atracdenc_core::at3::data::NUM_SAMPLES,
         Codec::Atrac3plus => 2048,
+    }
+}
+
+struct ProgressLogger {
+    total: u64,
+    last_percent: Option<u64>,
+}
+
+impl ProgressLogger {
+    fn new(total: u64) -> Self {
+        Self {
+            total,
+            last_percent: None,
+        }
+    }
+
+    fn record(&mut self, processed: u64) {
+        if self.total == 0 {
+            return;
+        }
+
+        let percent = processed.min(self.total) * 100 / self.total;
+        if self.last_percent != Some(percent) {
+            info!("Progress: {percent}% done");
+            self.last_percent = Some(percent);
+        }
+    }
+
+    fn finish(&mut self) {
+        self.record(self.total);
+        info!("Done");
+    }
+}
+
+fn log_encode_summary(
+    codec: Codec,
+    container: Container,
+    channels: usize,
+    sample_rate: u32,
+    total_samples: u64,
+    frame_count: u32,
+) {
+    info!("Input:");
+    info!("  Channels: {channels}");
+    info!("  Sample rate: {sample_rate} Hz");
+    info!(
+        "  Duration: {:.3} sec",
+        duration_seconds(total_samples, sample_rate)
+    );
+    info!("Output:");
+    info!("  Codec: {}", codec_label(codec));
+    info!("  Container: {}", container_label(container));
+    info!("  Frames: {frame_count}");
+}
+
+fn log_decode_summary(name: &str, channels: usize, total_samples: u64) {
+    info!("Input:");
+    info!("  Name: {name}");
+    info!("  Container: AEA");
+    info!("  Channels: {channels}");
+    info!(
+        "  Duration: {:.3} sec",
+        duration_seconds(total_samples, 44_100)
+    );
+    info!("Output:");
+    info!("  Codec: PCM");
+    info!("  Sample rate: 44100 Hz");
+}
+
+fn duration_seconds(total_samples: u64, sample_rate: u32) -> f64 {
+    if sample_rate == 0 {
+        0.0
+    } else {
+        total_samples as f64 / f64::from(sample_rate)
+    }
+}
+
+fn codec_label(codec: Codec) -> &'static str {
+    match codec {
+        Codec::Atrac1 => "ATRAC1",
+        Codec::Atrac3 => "ATRAC3",
+        Codec::Atrac3Lp4 => "ATRAC3 LP4",
+        Codec::Atrac3plus => "ATRAC3plus",
+    }
+}
+
+fn container_label(container: Container) -> &'static str {
+    match container {
+        Container::Aea => "AEA",
+        Container::Oma => "OMA",
+        Container::Riff => "RIFF",
+        Container::Rm => "RM",
+        Container::Raw => "Raw",
     }
 }
 

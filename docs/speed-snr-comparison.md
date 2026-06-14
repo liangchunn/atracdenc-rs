@@ -5,8 +5,8 @@ All tests use input file `atrac1_input_from_m4a.wav` (PCM s16le, 44100 Hz, stere
 **Methodology:** SNR is computed on the decoded PCM WAV output (not the encoded
 bitstream). ATRAC3 uses ffmpeg as a shared decoder; ATRAC1 uses each binary's own
 decoder. Speed measurements use hyperfine (`--warmup 1 --runs 3`) for statistical
-mean timing. Encodes use `--nostdout` (Rust) or `> /dev/null` (C++) to eliminate
-console I/O from the timing.
+mean timing. Rust commands use `RUST_LOG=off` and C++ commands use
+`> /dev/null` to eliminate console I/O from the timing.
 
 Reproduce: `bash docs/bench.sh`
 

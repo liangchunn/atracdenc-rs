@@ -81,10 +81,10 @@ CPP_DEC=$B_TIME
 CPP_TOTAL=$(echo "$CPP_ENC + $CPP_DEC" | bc -l)
 
 # Rust encode
-bench "ATRAC1 Rust encode" "$RUST_BIN" -e atrac1 -i "$INPUT" -o "$TMPDIR/a1_rust.aea" --container aea --nostdout
+bench "ATRAC1 Rust encode" env RUST_LOG=off "$RUST_BIN" -e atrac1 -i "$INPUT" -o "$TMPDIR/a1_rust.aea" --container aea
 RUST_ENC=$B_TIME
 # Rust decode
-bench "ATRAC1 Rust decode" "$RUST_BIN" -d -i "$TMPDIR/a1_rust.aea" -o "$TMPDIR/a1_rust_dec.wav" --nostdout
+bench "ATRAC1 Rust decode" env RUST_LOG=off "$RUST_BIN" -d -i "$TMPDIR/a1_rust.aea" -o "$TMPDIR/a1_rust_dec.wav"
 RUST_DEC=$B_TIME
 RUST_TOTAL=$(echo "$RUST_ENC + $RUST_DEC" | bc -l)
 
@@ -116,7 +116,7 @@ echo
 bench "ATRAC3 128 C++" "$CPP_BIN" -e atrac3 -i "$INPUT" -o "$TMPDIR/a3_128_orig.wav" --container riff --bitrate 128
 CPP_128=$B_TIME
 
-bench "ATRAC3 128 Rust" "$RUST_BIN" -e atrac3 -i "$INPUT" -o "$TMPDIR/a3_128_rust.wav" --container riff --bitrate 128 --nostdout
+bench "ATRAC3 128 Rust" env RUST_LOG=off "$RUST_BIN" -e atrac3 -i "$INPUT" -o "$TMPDIR/a3_128_rust.wav" --container riff --bitrate 128
 RUST_128=$B_TIME
 
 # decode both to PCM
@@ -153,7 +153,7 @@ echo
 bench "ATRAC3 102 C++" "$CPP_BIN" -e atrac3 -i "$INPUT" -o "$TMPDIR/a3_102_orig.wav" --container riff --bitrate 102
 CPP_102=$B_TIME
 
-bench "ATRAC3 102 Rust" "$RUST_BIN" -e atrac3 -i "$INPUT" -o "$TMPDIR/a3_102_rust.wav" --container riff --bitrate 102 --nostdout
+bench "ATRAC3 102 Rust" env RUST_LOG=off "$RUST_BIN" -e atrac3 -i "$INPUT" -o "$TMPDIR/a3_102_rust.wav" --container riff --bitrate 102
 RUST_102=$B_TIME
 
 "$FFMPEG" -y -i "$TMPDIR/a3_102_orig.wav" -c:a pcm_s16le "$TMPDIR/a3_102_orig_pcm.wav" 2>/dev/null
@@ -189,7 +189,7 @@ echo
 bench "ATRAC3_LP C++" "$CPP_BIN" -e atrac3_lp4 -i "$INPUT" -o "$TMPDIR/a3lp_64_orig.wav" --container riff
 CPP_LP4=$B_TIME
 
-bench "ATRAC3_LP Rust" "$RUST_BIN" -e atrac3-lp4 -i "$INPUT" -o "$TMPDIR/a3lp_64_rust.wav" --container riff --nostdout
+bench "ATRAC3_LP Rust" env RUST_LOG=off "$RUST_BIN" -e atrac3-lp4 -i "$INPUT" -o "$TMPDIR/a3lp_64_rust.wav" --container riff
 RUST_LP4=$B_TIME
 
 "$FFMPEG" -y -i "$TMPDIR/a3lp_64_orig.wav" -c:a pcm_s16le "$TMPDIR/a3lp_64_orig_pcm.wav" 2>/dev/null
@@ -241,7 +241,7 @@ echo
 echo "## Notes"
 echo
 echo "- Measurements use hyperfine ($HYPERFINE_OPTS) for statistical benchmarking."
-echo "- Encodes use \`--nostdout\` (Rust) or \`> /dev/null\` (C++) to eliminate console I/O."
+echo "- Rust commands use \`RUST_LOG=off\` and C++ commands use \`> /dev/null\` to eliminate console I/O."
 echo "- SNR (Signal-to-Noise Ratio): higher = better. Measures how close the Rust output"
 echo "  is to the C++ reference. 84 dB = nearly identical; 28 dB = audible differences."
 echo "- See [precision-analysis.md](precision-analysis.md) for details on cross-encoder SNR differences."

@@ -27,6 +27,7 @@ use crate::{
     },
     pcm::engine::{ProcessMeta, ProcessResult, Processor},
 };
+use log::{debug, trace};
 
 pub const LOUD_FACTOR: f32 = 0.006;
 
@@ -61,6 +62,19 @@ impl Atrac3Encoder {
         yaml_log: Option<Box<dyn Write>>,
     ) -> Self {
         let max_channels = 2;
+        debug!(
+            "creating ATRAC3 encoder: source_channels={}, output_channels={}, bitrate={}, frame_size={}, joint_stereo={}, no_gain_control={}, no_tonal_components={}, bfu_idx_const={}, bfu_mode={:?}, yaml_log={}",
+            settings.source_channels,
+            output.channels(),
+            settings.container_params.bitrate,
+            settings.container_params.frame_sz,
+            settings.container_params.joint_stereo,
+            settings.no_gain_control,
+            settings.no_tonal_components,
+            settings.bfu_idx_const,
+            settings.bfu_alloc_mode,
+            yaml_log.is_some()
+        );
         Self {
             output,
             settings,
@@ -371,6 +385,10 @@ impl Processor for Atrac3Encoder {
         let channels = usize::from(meta.channels).clamp(1, self.channels());
         assert!(channels <= 2);
         assert!(data.len() >= NUM_SAMPLES * channels);
+        trace!(
+            "ATRAC3 process frame start: frame_num={}, channels={channels}, lookahead_pending={}",
+            self.frame_num, self.lookahead_pending
+        );
 
         let qmf_offset = if self.lookahead_pending { 128 } else { 384 };
         for channel in 0..channels {
@@ -379,6 +397,7 @@ impl Processor for Atrac3Encoder {
 
         if self.lookahead_pending {
             self.lookahead_pending = false;
+            trace!("ATRAC3 lookahead buffered for frame_num={}", self.frame_num);
             return Ok(ProcessResult::LookAhead);
         }
 
@@ -484,6 +503,23 @@ impl Processor for Atrac3Encoder {
             self.single_channel_elements
                 .push(SingleChannelElement::new(1));
         }
+
+        let tonal_blocks: usize = self
+            .single_channel_elements
+            .iter()
+            .map(|sce| sce.tonal_blocks.len())
+            .sum();
+        let gain_points: usize = self
+            .single_channel_elements
+            .iter()
+            .flat_map(|sce| &sce.subband_info)
+            .map(Vec::len)
+            .sum();
+        trace!(
+            "ATRAC3 encode frame: frame_num={}, channels={channels}, joint_stereo={joint_stereo}, loudness={:.6}, tonal_blocks={tonal_blocks}, gain_points={gain_points}",
+            self.frame_num,
+            self.loudness / LOUD_FACTOR
+        );
 
         self.bitstream.write_sound_unit(
             self.output.as_mut(),

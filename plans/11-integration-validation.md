@@ -20,7 +20,7 @@ Phase 10 (full CLI). Dev-dependencies for `atracdenc-cli`: `assert_cmd`, `predic
 Shared helpers (mirror the Python):
 - `write_wav(path, samples)` — mono, 16-bit, 44100 Hz, `samples` zero frames (use `hound`).
 - `UTF8_STEM = "é-入力-тест"`.
-- Run the binary via `assert_cmd::Command::cargo_bin("atracdenc")` with `--nostdout`.
+- Run the binary via `assert_cmd::Command::cargo_bin("atracdenc")`; use `RUST_LOG=off` for tests that need quiet output.
 
 Port all 10 cases as `#[test]` fns (each in its own tempdir via `tempfile`):
 

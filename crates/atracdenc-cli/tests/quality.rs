@@ -63,7 +63,11 @@ fn read_wav_i16_mono(path: &Path) -> Vec<f32> {
 }
 
 fn run(args: &[&str]) -> Output {
-    Command::new(bin()).args(args).output().unwrap()
+    Command::new(bin())
+        .args(args)
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap()
 }
 
 fn assert_success(output: Output) {
@@ -154,7 +158,6 @@ fn atrac1_cli_encode_decode_keeps_aligned_snr_above_regression_floor() {
         input.to_str().unwrap(),
         "-o",
         encoded.to_str().unwrap(),
-        "--nostdout",
     ]));
     assert_success(run(&[
         "-d",
@@ -162,7 +165,6 @@ fn atrac1_cli_encode_decode_keeps_aligned_snr_above_regression_floor() {
         encoded.to_str().unwrap(),
         "-o",
         decoded.to_str().unwrap(),
-        "--nostdout",
     ]));
 
     let reference = read_wav_i16_mono(&input);

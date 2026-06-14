@@ -48,7 +48,18 @@ fn write_wav(path: &Path, frames: usize) {
 }
 
 fn run(args: &[&str]) -> Output {
-    Command::new(bin()).args(args).output().unwrap()
+    run_with_rust_log(args, None)
+}
+
+fn run_with_rust_log(args: &[&str], rust_log: Option<&str>) -> Output {
+    let mut command = Command::new(bin());
+    command.args(args);
+    if let Some(rust_log) = rust_log {
+        command.env("RUST_LOG", rust_log);
+    } else {
+        command.env_remove("RUST_LOG");
+    }
+    command.output().unwrap()
 }
 
 fn combined_lower(output: &Output) -> String {
@@ -108,7 +119,6 @@ fn missing_input_reports_open_error_before_wav_validation() {
         missing.to_str().unwrap(),
         "-o",
         out.to_str().unwrap(),
-        "--nostdout",
     ]);
 
     assert!(!output.status.success());
@@ -116,6 +126,86 @@ fn missing_input_reports_open_error_before_wav_validation() {
     assert!(text.contains("unable to open input file"));
     assert!(text.contains("missing.wav"));
     assert!(!text.contains("unsupported sample rate"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn default_encode_emits_info_summary_progress_and_done() {
+    let dir = tempdir("default-logs");
+    let input = dir.join("in.wav");
+    let out = dir.join("out.aea");
+    write_wav(&input, 8192);
+
+    let output = run(&[
+        "-e",
+        "atrac1",
+        "-i",
+        input.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    let text = combined_lower(&output);
+
+    assert_success(output);
+    assert!(text.contains("input file:"));
+    assert!(text.contains("codec: atrac1"));
+    assert!(text.contains("progress: 0% done"));
+    assert!(text.contains("progress: 100% done"));
+    assert!(text.contains("done"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn rust_log_off_suppresses_info_logs() {
+    let dir = tempdir("rust-log-off");
+    let input = dir.join("in.wav");
+    let out = dir.join("out.aea");
+    write_wav(&input, 8192);
+
+    let output = run_with_rust_log(
+        &[
+            "-e",
+            "atrac1",
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ],
+        Some("off"),
+    );
+    let text = combined_lower(&output);
+
+    assert_success(output);
+    assert!(!text.contains("input file:"));
+    assert!(!text.contains("progress:"));
+    assert!(!text.contains("codec: atrac1"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn rust_log_trace_exposes_facade_and_core_diagnostics() {
+    let dir = tempdir("trace-logs");
+    let input = dir.join("in.wav");
+    let out = dir.join("out.aea");
+    write_wav(&input, 8192);
+
+    let output = run_with_rust_log(
+        &[
+            "-e",
+            "atrac1",
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ],
+        Some("trace"),
+    );
+    let text = combined_lower(&output);
+
+    assert_success(output);
+    assert!(text.contains("debug atracdenc] validated wav input"));
+    assert!(text.contains("trace atracdenc_core::pcm::engine] pcm apply_process start"));
+    assert!(text.contains("trace atracdenc_core::at1::codec] atrac1 encode frame"));
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -134,7 +224,6 @@ fn utf8_input_atrac3_encode_succeeds() {
         "-o",
         out.to_str().unwrap(),
         "--notonal",
-        "--nostdout",
     ]));
     assert!(fs::metadata(out).unwrap().len() > 0);
     let _ = fs::remove_dir_all(dir);
@@ -154,7 +243,6 @@ fn utf8_input_atrac1_encode_succeeds() {
         input.to_str().unwrap(),
         "-o",
         out.to_str().unwrap(),
-        "--nostdout",
     ]));
     assert!(fs::metadata(out).unwrap().len() > 0);
     let _ = fs::remove_dir_all(dir);
@@ -176,7 +264,6 @@ fn utf8_atrac3_output_extensions_succeed() {
             "-o",
             out.to_str().unwrap(),
             "--notonal",
-            "--nostdout",
         ]));
         assert!(fs::metadata(out).unwrap().len() > 0);
     }
@@ -198,7 +285,6 @@ fn atrac3_rm_output_uses_computed_frame_count() {
         "-o",
         out.to_str().unwrap(),
         "--notonal",
-        "--nostdout",
     ]));
 
     let bytes = fs::read(&out).unwrap();
@@ -227,7 +313,6 @@ fn atrac3_yaml_log_path_is_written() {
         "--yaml-log",
         yaml_log.to_str().unwrap(),
         "--notonal",
-        "--nostdout",
     ]));
     assert!(fs::metadata(out).unwrap().len() > 0);
     assert!(fs::metadata(yaml_log).unwrap().len() > 0);
@@ -251,7 +336,6 @@ fn atrac1_yaml_log_is_rejected_before_touching_bad_yaml_path() {
         out.to_str().unwrap(),
         "--yaml-log",
         yaml_log.to_str().unwrap(),
-        "--nostdout",
     ]);
 
     assert!(!output.status.success());
@@ -280,7 +364,6 @@ fn atrac3_bad_yaml_log_path_does_not_create_output_temp() {
         "--yaml-log",
         yaml_log.to_str().unwrap(),
         "--notonal",
-        "--nostdout",
     ]);
 
     assert!(!output.status.success());
@@ -305,7 +388,6 @@ fn utf8_atrac1_output_and_decode_succeed() {
         input.to_str().unwrap(),
         "-o",
         encoded.to_str().unwrap(),
-        "--nostdout",
     ]));
     assert_success(run(&[
         "-d",
@@ -313,7 +395,6 @@ fn utf8_atrac1_output_and_decode_succeed() {
         encoded.to_str().unwrap(),
         "-o",
         decoded.to_str().unwrap(),
-        "--nostdout",
     ]));
     assert!(fs::metadata(decoded).unwrap().len() > 0);
     let _ = fs::remove_dir_all(dir);
@@ -337,7 +418,6 @@ fn invalid_encode_does_not_truncate_existing_output() {
         out.to_str().unwrap(),
         "--bitrate",
         "384",
-        "--nostdout",
     ]);
 
     assert!(!output.status.success());
@@ -363,7 +443,6 @@ fn explicit_container_overrides_extension_and_invalid_combos_fail() {
         "--container",
         "riff",
         "--notonal",
-        "--nostdout",
     ]));
     assert_eq!(b"RIFF", &fs::read(&riff_named_oma).unwrap()[..4]);
 
@@ -377,7 +456,6 @@ fn explicit_container_overrides_extension_and_invalid_combos_fail() {
         raw_named_aea.to_str().unwrap(),
         "--container",
         "raw",
-        "--nostdout",
     ]));
     assert!(fs::metadata(raw_named_aea).unwrap().len() > 0);
 
@@ -390,7 +468,6 @@ fn explicit_container_overrides_extension_and_invalid_combos_fail() {
         dir.join("bad.oma").to_str().unwrap(),
         "--container",
         "oma",
-        "--nostdout",
     ]);
     assert!(!invalid_at1.status.success());
     assert!(combined_lower(&invalid_at1).contains("container oma is not supported for atrac1"));
@@ -404,7 +481,6 @@ fn explicit_container_overrides_extension_and_invalid_combos_fail() {
         dir.join("bad.rm").to_str().unwrap(),
         "--container",
         "rm",
-        "--nostdout",
     ]);
     assert!(!invalid_at3p.status.success());
     assert!(combined_lower(&invalid_at3p).contains("container rm is not supported for atrac3plus"));

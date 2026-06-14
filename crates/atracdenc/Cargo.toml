@@ -7,4 +7,5 @@ repository.workspace = true
 
 [dependencies]
 atracdenc-core = { path = "../atracdenc-core" }
+log = "0.4.32"
 thiserror = "2.0.18"

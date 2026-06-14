@@ -1,6 +1,7 @@
 use std::io;
 
 use crate::AtracdencError;
+use log::{debug, trace};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ProcessResult {
@@ -109,6 +110,11 @@ impl PcmEngine {
         reader: Option<Box<dyn PcmReader>>,
         writer: Option<Box<dyn PcmWriter>>,
     ) -> Self {
+        debug!(
+            "creating PCM engine: buffer_size={buf_size}, channels={num_channels}, has_reader={}, has_writer={}",
+            reader.is_some(),
+            writer.is_some()
+        );
         Self {
             buffer: PcmBuffer::new(buf_size, num_channels),
             writer,
@@ -123,6 +129,12 @@ impl PcmEngine {
         step: usize,
         processor: &mut dyn Processor,
     ) -> Result<u64, AtracdencError> {
+        trace!(
+            "PCM apply_process start: step={step}, buffer_size={}, processed={}, to_drain={}",
+            self.buffer.size(),
+            self.processed,
+            self.to_drain
+        );
         if step == 0 {
             return Err(PcmEngineError::InternalState.into());
         }
@@ -134,10 +146,16 @@ impl PcmEngine {
         if let Some(reader) = &mut self.reader {
             let size_to_read = self.buffer.size() as u32;
             let ok = reader.read(&mut self.buffer, size_to_read)?;
+            trace!("PCM reader read: requested={size_to_read}, ok={ok}");
             if !ok {
                 if self.to_drain != 0 {
+                    trace!(
+                        "PCM reader exhausted; draining {} lookahead frame(s)",
+                        self.to_drain
+                    );
                     drain = true;
                 } else {
+                    trace!("PCM reader exhausted with nothing to drain");
                     return Err(PcmEngineError::NoDataToRead.into());
                 }
             }
@@ -150,6 +168,7 @@ impl PcmEngine {
 
         for i in (0..=self.buffer.size() - step).step_by(step) {
             let res = processor.process_frame(self.buffer.frames_mut(i, step), &meta)?;
+            trace!("PCM processor result at buffer_pos={i}: {res:?}");
             if res == ProcessResult::Processed {
                 last_pos += step;
                 if drain && self.to_drain != 0 {
@@ -165,10 +184,12 @@ impl PcmEngine {
         }
 
         if let Some(writer) = &mut self.writer {
+            trace!("PCM writer write: frames={last_pos}");
             writer.write(&self.buffer, last_pos as u32)?;
         }
 
         self.processed += last_pos as u64;
+        trace!("PCM apply_process done: processed={}", self.processed);
         Ok(self.processed)
     }
 }

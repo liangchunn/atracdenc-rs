@@ -271,7 +271,7 @@ Remove or document their purpose.
 
 ### 5.3 Dead CLI flags
 
-**[M] `crates/atracdenc-cli/src/main.rs:70,76,84`** — `--bfuidxfast`, `--nostdout`, `--mono`
+**[M] `crates/atracdenc-cli/src/main.rs:70,76,84`** — `--bfuidxfast`, `--mono`
 
 These are parsed but never read in any execution path. Either:
 - Wire them up to their intended behavior

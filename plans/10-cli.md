@@ -24,14 +24,13 @@ Phases 06–09 (codecs + containers + engine). A scaffold handling only ATRAC1 c
 | `-e, --encode <codec>` | `atrac1` (default), `atrac3`, `atrac3_lp4` (= atrac3 @ 66kbps joint stereo... read main.cpp: lp4 maps to the 64kbps-class preset), `atrac3plus` |
 | `-d, --decode` | ATRAC1 only; error for others |
 | `-i <file>` | input (WAV for encode; AEA for decode) |
-| `-o <file>` | output; `-o -` plus `--nostdout` semantics — read main.cpp for the exact stdout-suppression behavior |
+| `-o <file>` | output path |
 | `-h, --help` | help text |
 | `--bitrate <n>` | ATRAC3 + RM container path; range 32–384 as validated in main.cpp |
 | `--container <c>` | `aea`, `oma`, `riff`, `rm`, `raw`; if absent, inferred from output extension (`.aea`, `.oma`/`.omg`, `.at3`/`.wav`?, `.rm`, fallback — read `main.cpp` inference code for exact extension map) |
 | `--bfuidxconst <n>` | ATRAC1: 1–8; also ATRAC3 (check range validation in main.cpp) |
 | `--bfuidxfast` | deprecated no-op; accept and ignore (print the same deprecation notice if C++ does) |
 | `--notransient[=mask]` | ATRAC1: disable transient detection; optional mask forces short windows per band |
-| `--nostdout` | suppress progress output |
 | `--notonal` | ATRAC3: disable tonal components |
 | `--nogaincontrol` | ATRAC3: disable gain control |
 | `--advanced <opts>` | ATRAC3+: forwarded to `at3p::parse_advanced_opt` |
@@ -67,7 +66,7 @@ Port the `main.cpp` flow:
 
 ### 4. Progress display (`progress.rs`)
 
-Port `printProgress` from main.cpp: percentage updates on stdout (carriage-return style), disabled by `--nostdout` or when output is `-`. Static counter state → struct field.
+Emit progress through Rust logging; users can suppress it with `RUST_LOG=off`.
 
 ### 5. Tests
 

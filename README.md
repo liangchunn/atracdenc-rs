@@ -82,8 +82,8 @@ atracdenc -e atrac3 --yaml-log gain.yaml -i input.wav -o out.oma
 # Disable ATRAC1 transient detection per band
 atracdenc -e atrac1 --notransient 0xff -i in.wav -o out.aea
 
-# Suppress progress output
-atracdenc -e atrac3 --nostdout -i input.wav -o output.oma
+# Suppress log output
+RUST_LOG=off atracdenc -e atrac3 -i input.wav -o output.oma
 ```
 
 Input must be 44100 Hz, 16-bit, mono or stereo WAV. Decode only supports ATRAC1

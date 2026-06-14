@@ -83,8 +83,22 @@ pub enum EncodeStatus {
     Repeat,
 }
 
+/// Errors produced by a bitstream part encoder.
+///
+/// This framework is internal and codec-specific (currently only ATRAC3+);
+/// the trait is not meant to be implemented by library consumers.
+#[derive(Debug, thiserror::Error)]
+pub enum BitStreamEncodeError {
+    #[error("tonal bands ({tone_bands}) exceed quant units ({quant_units})")]
+    TonalBandsExceedQuantUnits { tone_bands: u8, quant_units: u32 },
+}
+
 pub trait BitStreamPartEncoder<TFrame> {
-    fn encode(&mut self, frame: &mut TFrame, ba: &mut BitAllocHandler) -> EncodeStatus;
+    fn encode(
+        &mut self,
+        frame: &mut TFrame,
+        ba: &mut BitAllocHandler,
+    ) -> Result<EncodeStatus, BitStreamEncodeError>;
     fn dump(&mut self, bs: &mut BitStream);
     fn reset(&mut self) {}
     fn consumption(&self) -> u32;
@@ -99,7 +113,11 @@ impl<TFrame> BitStreamEncoder<TFrame> {
         Self { parts }
     }
 
-    pub fn run(&mut self, frame: &mut TFrame, bs: &mut BitStream) {
+    pub fn run(
+        &mut self,
+        frame: &mut TFrame,
+        bs: &mut BitStream,
+    ) -> Result<(), BitStreamEncodeError> {
         let mut ba = BitAllocHandler::new();
         let mut cont;
 
@@ -114,7 +132,7 @@ impl<TFrame> BitStreamEncoder<TFrame> {
                     .map(|part| part.consumption())
                     .sum();
 
-                let status = self.parts[cur_enc_pos].encode(frame, &mut ba);
+                let status = self.parts[cur_enc_pos].encode(frame, &mut ba)?;
 
                 if ba.need_repeat {
                     ba.need_repeat = false;
@@ -142,6 +160,8 @@ impl<TFrame> BitStreamEncoder<TFrame> {
         for part in &mut self.parts {
             part.dump(bs);
         }
+
+        Ok(())
     }
 }
 
@@ -174,10 +194,14 @@ mod tests {
     }
 
     impl BitStreamPartEncoder<Frame> for PartEncoder1 {
-        fn encode(&mut self, _frame: &mut Frame, ba: &mut BitAllocHandler) -> EncodeStatus {
+        fn encode(
+            &mut self,
+            _frame: &mut Frame,
+            ba: &mut BitAllocHandler,
+        ) -> Result<EncodeStatus, BitStreamEncodeError> {
             self.enc_calls += 1;
             ba.start(1000, -15.0, -1.0);
-            EncodeStatus::Ok
+            Ok(EncodeStatus::Ok)
         }
 
         fn dump(&mut self, _bs: &mut BitStream) {
@@ -208,13 +232,17 @@ mod tests {
     }
 
     impl BitStreamPartEncoder<Frame> for PartEncoder2 {
-        fn encode(&mut self, _frame: &mut Frame, ba: &mut BitAllocHandler) -> EncodeStatus {
+        fn encode(
+            &mut self,
+            _frame: &mut Frame,
+            ba: &mut BitAllocHandler,
+        ) -> Result<EncodeStatus, BitStreamEncodeError> {
             self.enc_calls += 1;
             let lambda = ba.cont();
             let bits = (self.f)(lambda);
             ba.submit(bits);
             self.bits = bits;
-            EncodeStatus::Ok
+            Ok(EncodeStatus::Ok)
         }
 
         fn dump(&mut self, bs: &mut BitStream) {
@@ -244,9 +272,13 @@ mod tests {
     }
 
     impl BitStreamPartEncoder<Frame> for PartEncoder3 {
-        fn encode(&mut self, _frame: &mut Frame, _ba: &mut BitAllocHandler) -> EncodeStatus {
+        fn encode(
+            &mut self,
+            _frame: &mut Frame,
+            _ba: &mut BitAllocHandler,
+        ) -> Result<EncodeStatus, BitStreamEncodeError> {
             self.enc_calls += 1;
-            EncodeStatus::Ok
+            Ok(EncodeStatus::Ok)
         }
 
         fn dump(&mut self, _bs: &mut BitStream) {
@@ -264,13 +296,17 @@ mod tests {
     }
 
     impl BitStreamPartEncoder<Frame> for PartEncoder4 {
-        fn encode(&mut self, _frame: &mut Frame, _ba: &mut BitAllocHandler) -> EncodeStatus {
+        fn encode(
+            &mut self,
+            _frame: &mut Frame,
+            _ba: &mut BitAllocHandler,
+        ) -> Result<EncodeStatus, BitStreamEncodeError> {
             if self.enc_calls == 0 {
                 self.enc_calls += 1;
-                return EncodeStatus::Repeat;
+                return Ok(EncodeStatus::Repeat);
             }
 
-            EncodeStatus::Ok
+            Ok(EncodeStatus::Ok)
         }
 
         fn dump(&mut self, _bs: &mut BitStream) {
@@ -292,7 +328,7 @@ mod tests {
             Box::new(PartEncoder3::new(1)),
         ]);
 
-        encoder.run(&mut frame, &mut bs);
+        encoder.run(&mut frame, &mut bs).unwrap();
 
         assert_eq!(1000, bs.size_in_bits());
     }
@@ -308,7 +344,7 @@ mod tests {
             Box::new(PartEncoder4::default()),
         ]);
 
-        encoder.run(&mut frame, &mut bs);
+        encoder.run(&mut frame, &mut bs).unwrap();
 
         assert_eq!(1000, bs.size_in_bits());
     }
@@ -323,7 +359,7 @@ mod tests {
             Box::new(PartEncoder3::new(1)),
         ]);
 
-        encoder.run(&mut frame, &mut bs);
+        encoder.run(&mut frame, &mut bs).unwrap();
 
         assert_eq!(993, bs.size_in_bits());
     }

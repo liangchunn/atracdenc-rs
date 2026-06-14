@@ -1,6 +1,8 @@
 use std::io;
 
-use crate::{container::ContainerError, pcm::engine::PcmEngineError};
+use crate::{
+    bitstream::encode::BitStreamEncodeError, container::ContainerError, pcm::engine::PcmEngineError,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AtracdencError {
@@ -10,6 +12,8 @@ pub enum AtracdencError {
     PcmEngine(#[from] PcmEngineError),
     #[error("container error: {0}")]
     Container(#[from] ContainerError),
+    #[error("bitstream encode error: {0}")]
+    BitStreamEncode(#[from] BitStreamEncodeError),
     #[error("invalid input: {0}")]
     InvalidInput(String),
 }

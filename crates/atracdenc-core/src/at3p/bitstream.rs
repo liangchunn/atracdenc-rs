@@ -10,9 +10,10 @@ use std::sync::LazyLock;
 use crate::atrac::scale::{ScaledBlock, quant_mantissas};
 use crate::bitstream::BitStream;
 use crate::bitstream::encode::{
-    BitAllocHandler, BitStreamEncoder, BitStreamPartEncoder, EncodeStatus,
+    BitAllocHandler, BitStreamEncodeError, BitStreamEncoder, BitStreamPartEncoder, EncodeStatus,
 };
-use crate::container::{CompressedOutput, ContainerError};
+use crate::container::CompressedOutput;
+use crate::error::AtracdencError;
 
 use super::ff_tables::*;
 use super::gha::{At3PGhaData, WaveParam};
@@ -201,7 +202,11 @@ const ALLOC_TABLE: [u8; 32] = [
 ];
 
 impl<'a> BitStreamPartEncoder<SpecFrame<'a>> for Configure {
-    fn encode(&mut self, frame: &mut SpecFrame<'a>, _ba: &mut BitAllocHandler) -> EncodeStatus {
+    fn encode(
+        &mut self,
+        frame: &mut SpecFrame<'a>,
+        _ba: &mut BitAllocHandler,
+    ) -> Result<EncodeStatus, BitStreamEncodeError> {
         let nqu = frame.num_quant_units as usize;
         frame.word_len.resize(nqu, (0, 0));
         for i in 0..nqu {
@@ -225,7 +230,7 @@ impl<'a> BitStreamPartEncoder<SpecFrame<'a>> for Configure {
         self.d.insert(0, 1); // mute flag
 
         frame.allocated_bits = self.d.consumption() as usize;
-        EncodeStatus::Ok
+        Ok(EncodeStatus::Ok)
     }
     fn dump(&mut self, bs: &mut BitStream) {
         self.d.dump(bs);
@@ -282,7 +287,11 @@ impl WordLenEncoder {
 }
 
 impl<'a> BitStreamPartEncoder<SpecFrame<'a>> for WordLenEncoder {
-    fn encode(&mut self, frame: &mut SpecFrame<'a>, _ba: &mut BitAllocHandler) -> EncodeStatus {
+    fn encode(
+        &mut self,
+        frame: &mut SpecFrame<'a>,
+        _ba: &mut BitAllocHandler,
+    ) -> Result<EncodeStatus, BitStreamEncodeError> {
         let nqu = frame.num_quant_units as usize;
         let mut deltas_ch0 = [0u8; 32];
         let mut inter_ch_deltas = [0u8; 32];
@@ -337,7 +346,7 @@ impl<'a> BitStreamPartEncoder<SpecFrame<'a>> for WordLenEncoder {
             }
         }
 
-        EncodeStatus::Ok
+        Ok(EncodeStatus::Ok)
     }
     fn dump(&mut self, bs: &mut BitStream) {
         self.d.dump(bs);
@@ -358,9 +367,13 @@ struct SfIdxEncoder {
 }
 
 impl<'a> BitStreamPartEncoder<SpecFrame<'a>> for SfIdxEncoder {
-    fn encode(&mut self, frame: &mut SpecFrame<'a>, _ba: &mut BitAllocHandler) -> EncodeStatus {
+    fn encode(
+        &mut self,
+        frame: &mut SpecFrame<'a>,
+        _ba: &mut BitAllocHandler,
+    ) -> Result<EncodeStatus, BitStreamEncodeError> {
         if frame.sf_idx.is_empty() {
-            return EncodeStatus::Ok;
+            return Ok(EncodeStatus::Ok);
         }
         let nqu = frame.num_quant_units as usize;
         for ch in 0..frame.channels {
@@ -374,7 +387,7 @@ impl<'a> BitStreamPartEncoder<SpecFrame<'a>> for SfIdxEncoder {
                 self.d.insert(v as u16, 6);
             }
         }
-        EncodeStatus::Ok
+        Ok(EncodeStatus::Ok)
     }
     fn dump(&mut self, bs: &mut BitStream) {
         self.d.dump(bs);
@@ -484,7 +497,11 @@ fn encode_code_tab(
 }
 
 impl<'a> BitStreamPartEncoder<SpecFrame<'a>> for QuantUnitsEncoder {
-    fn encode(&mut self, frame: &mut SpecFrame<'a>, _ba: &mut BitAllocHandler) -> EncodeStatus {
+    fn encode(
+        &mut self,
+        frame: &mut SpecFrame<'a>,
+        _ba: &mut BitAllocHandler,
+    ) -> Result<EncodeStatus, BitStreamEncodeError> {
         let nqu = frame.num_quant_units as usize;
         let mut data: Vec<Vec<(u16, u8)>> = Vec::new();
 
@@ -536,7 +553,7 @@ impl<'a> BitStreamPartEncoder<SpecFrame<'a>> for QuantUnitsEncoder {
             }
         }
 
-        EncodeStatus::Ok
+        Ok(EncodeStatus::Ok)
     }
     fn dump(&mut self, bs: &mut BitStream) {
         self.d.dump(bs);
@@ -691,14 +708,21 @@ impl TonalComponentEncoder {
 }
 
 impl<'a> BitStreamPartEncoder<SpecFrame<'a>> for TonalComponentEncoder {
-    fn encode(&mut self, frame: &mut SpecFrame<'a>, ba: &mut BitAllocHandler) -> EncodeStatus {
+    fn encode(
+        &mut self,
+        frame: &mut SpecFrame<'a>,
+        ba: &mut BitAllocHandler,
+    ) -> Result<EncodeStatus, BitStreamEncodeError> {
         if self.bits_used != 0 {
             if let Some(tb) = frame.tonal_block {
                 if tb.num_tone_bands as u32 > frame.num_quant_units {
-                    panic!("tonal bands exceed quant units (TODO)");
+                    return Err(BitStreamEncodeError::TonalBandsExceedQuantUnits {
+                        tone_bands: tb.num_tone_bands,
+                        quant_units: frame.num_quant_units,
+                    });
                 }
             }
-            return self.check_frame_done(frame, ba);
+            return Ok(self.check_frame_done(frame, ba));
         }
 
         let ch_num = frame.channels;
@@ -742,7 +766,7 @@ impl<'a> BitStreamPartEncoder<SpecFrame<'a>> for TonalComponentEncoder {
 
         self.bits_used = self.d.consumption() as usize;
 
-        self.check_frame_done(frame, ba)
+        Ok(self.check_frame_done(frame, ba))
     }
     fn dump(&mut self, bs: &mut BitStream) {
         self.d.dump(bs);
@@ -786,19 +810,20 @@ impl At3PBitStream {
         channels: usize,
         tonal: Option<&At3PGhaData>,
         sces: &[SingleChannelElement],
-    ) -> Result<(), ContainerError> {
+    ) -> Result<(), AtracdencError> {
         let mut bs = BitStream::new();
         bs.write(0, 1);
         bs.write((channels - 1) as u32, 2);
 
         let mut frame = SpecFrame::new(self.frame_sz_to_alloc_bits, 32, channels, tonal, sces);
         let mut encoder = BitStreamEncoder::new(create_enc_parts());
-        encoder.run(&mut frame, &mut bs);
+        encoder.run(&mut frame, &mut bs)?;
 
         assert!(bs.size_in_bits() <= self.frame_sz as usize * 8);
         let mut buf = bs.bytes().to_vec();
         buf.resize(self.frame_sz as usize, 0);
-        out.write_frame(&buf)
+        out.write_frame(&buf)?;
+        Ok(())
     }
 }
 
@@ -889,8 +914,37 @@ mod tests {
         let mut bs = BitStream::new();
         let mut encoder: BitStreamEncoder<SpecFrame> =
             BitStreamEncoder::new(vec![Box::new(WordLenEncoder::default())]);
-        encoder.run(&mut frame, &mut bs);
+        encoder.run(&mut frame, &mut bs).unwrap();
 
         assert_eq!(bs.size_in_bits(), 28);
+    }
+
+    #[test]
+    fn tonal_bands_exceeding_quant_units_returns_error() {
+        let gha = At3PGhaData {
+            num_tone_bands: 5,
+            ..Default::default()
+        };
+
+        let sce = vec![SingleChannelElement::default()];
+        let mut frame = SpecFrame::new(444, 4, 1, Some(&gha), &sce);
+        frame.num_quant_units = 4; // fewer quant units than tone bands
+
+        // Force the "tonal component already encoded" branch (second pass).
+        let mut enc = TonalComponentEncoder {
+            bits_used: 1,
+            ..Default::default()
+        };
+
+        let mut ba = BitAllocHandler::new();
+        let res = enc.encode(&mut frame, &mut ba);
+
+        assert!(matches!(
+            res,
+            Err(BitStreamEncodeError::TonalBandsExceedQuantUnits {
+                tone_bands: 5,
+                quant_units: 4,
+            })
+        ));
     }
 }

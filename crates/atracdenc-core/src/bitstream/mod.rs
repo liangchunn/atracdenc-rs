@@ -32,14 +32,26 @@ impl BitStream {
             self.buf.resize(needed_bytes, 0);
         }
 
-        for bit_idx in (0..n).rev() {
-            let bit = ((val >> bit_idx) & 1) as u8;
-            let pos = self.bits_used;
+        // Word-at-a-time MSB-first write. Equivalent to shifting out `n` bits
+        // one at a time, but consumes byte-aligned chunks to avoid a per-bit
+        // divmod. Produces byte-identical output to the per-bit loop.
+        let mut remaining = n;
+        let mut pos = self.bits_used;
+        while remaining > 0 {
             let byte_pos = pos / 8;
-            let bit_pos = 7 - (pos % 8);
-            self.buf[byte_pos] |= bit << bit_pos;
-            self.bits_used += 1;
+            let bit_off = pos % 8;
+            let avail = 8 - bit_off; // free bits left in the current byte
+            let take = avail.min(remaining); // bits to write this iteration
+
+            // Top `take` bits of the still-unwritten portion of `val`.
+            let chunk = ((val >> (remaining - take)) & ((1 << take) - 1)) as u8;
+            // Left-align within the available bits of the byte (MSB-first).
+            self.buf[byte_pos] |= chunk << (avail - take);
+
+            pos += take;
+            remaining -= take;
         }
+        self.bits_used = pos;
     }
 
     pub fn read(&mut self, n: usize) -> u32 {

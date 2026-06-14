@@ -192,27 +192,34 @@ impl At3pEncoder {
         }
 
         // GHA analysis: writes residual into each channel's prev_buf.
-        let cur0 = self.ch[0].buf[self.ch[0].cur_idx.unwrap()].to_vec();
-        let next0 = self.ch[0].buf[self.ch[0].next_idx].to_vec();
+        // `buf` (read) and `prev_buf` (written) are disjoint fields, so the
+        // band buffers are passed by reference without copying.
         let tonal_owned: Option<At3PGhaData> = if channels == 2 {
-            let cur1 = self.ch[1].buf[self.ch[1].cur_idx.unwrap()].to_vec();
-            let next1 = self.ch[1].buf[self.ch[1].next_idx].to_vec();
             let (l, r) = self.ch.split_at_mut(1);
+            let c0 = &mut l[0];
+            let c1 = &mut r[0];
+            let cur0 = c0.cur_idx.unwrap();
+            let next0 = c0.next_idx;
+            let cur1 = c1.cur_idx.unwrap();
+            let next1 = c1.next_idx;
             self.gha
                 .do_analyze(
-                    [&cur0, &next0],
-                    [&cur1, &next1],
-                    &mut l[0].prev_buf,
-                    &mut r[0].prev_buf,
+                    [&c0.buf[cur0], &c0.buf[next0]],
+                    [&c1.buf[cur1], &c1.buf[next1]],
+                    &mut c0.prev_buf,
+                    &mut c1.prev_buf,
                 )
                 .cloned()
         } else {
             let mut dummy = [0.0f32; NUM_SAMPLES];
+            let c0 = &mut self.ch[0];
+            let cur0 = c0.cur_idx.unwrap();
+            let next0 = c0.next_idx;
             self.gha
                 .do_analyze(
-                    [&cur0, &next0],
+                    [&c0.buf[cur0], &c0.buf[next0]],
                     [&[], &[]],
-                    &mut self.ch[0].prev_buf,
+                    &mut c0.prev_buf,
                     &mut dummy,
                 )
                 .cloned()

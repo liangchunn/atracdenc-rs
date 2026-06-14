@@ -61,6 +61,21 @@ pub struct GhaCtx {
     fft_inv: Arc<dyn Fft<f32>>,
     fwd_scratch: Vec<Complex<f32>>,
     inv_scratch: Vec<Complex<f32>>,
+    // Reusable scratch for the FFT path (analog of C's preallocated ctx buffers).
+    fft_in: Vec<Complex<f32>>,
+    resample_full: Vec<Complex<f32>>,
+    resampled: Vec<f32>,
+    // Reusable Newton-MD scratch (analog of C's `alloca` buffers in
+    // `gha_adjust_info_newton_md`). Grown on demand, reused across calls.
+    // The reference's `baw`/`bap`/`bwp` buffers are omitted: they only fed
+    // matrix blocks that are unconditionally zeroed by symmetrization.
+    nm_m: Vec<f64>,
+    nm_fx0: Vec<f64>,
+    nm_ba: Vec<f64>,
+    nm_bw: Vec<f64>,
+    nm_bp: Vec<f64>,
+    nm_bww: Vec<f64>,
+    nm_bpp: Vec<f32>,
 }
 
 impl GhaCtx {
@@ -85,6 +100,16 @@ impl GhaCtx {
             fft_inv,
             fwd_scratch,
             inv_scratch,
+            fft_in: vec![Complex::default(); size],
+            resample_full: vec![Complex::default(); size * 2],
+            resampled: vec![0.0; size * 2],
+            nm_m: Vec::new(),
+            nm_fx0: Vec::new(),
+            nm_ba: Vec::new(),
+            nm_bw: Vec::new(),
+            nm_bp: Vec::new(),
+            nm_bww: Vec::new(),
+            nm_bpp: Vec::new(),
         };
         ctx.init_window();
         ctx
@@ -136,29 +161,25 @@ impl GhaCtx {
 
     /// Forward real FFT of `tmp_buf` into `fft_out[0..=size/2]`.
     fn real_fft_forward(&mut self) {
-        let mut buf: Vec<Complex<f32>> = self
-            .tmp_buf
-            .iter()
-            .map(|&v| Complex { re: v, im: 0.0 })
-            .collect();
+        let buf = &mut self.fft_in;
+        for (b, &v) in buf.iter_mut().zip(self.tmp_buf.iter()) {
+            *b = Complex { re: v, im: 0.0 };
+        }
         self.fft_fwd
-            .process_with_scratch(&mut buf, &mut self.fwd_scratch);
-        // Zero the spectrum buffer (size + 1) then fill the positive half.
+            .process_with_scratch(buf, &mut self.fwd_scratch);
         for c in self.fft_out.iter_mut() {
             *c = Complex::default();
         }
         for i in 0..=self.size / 2 {
-            self.fft_out[i] = buf[i];
+            self.fft_out[i] = self.fft_in[i];
         }
     }
 
     /// Inverse real FFT (2x size) from the hermitian half in `fft_out`, scaled
-    /// by `1/size` (matches C `resample_fft`).
-    fn resample_fft(&mut self, resampled: &mut [f32]) {
+    /// by `1/size` (matches C `resample_fft`). Result left in `self.resampled`.
+    fn resample_fft(&mut self) {
         let m = self.size * 2;
-        let mut full = vec![Complex::<f32>::default(); m];
-        // fft_out holds bins 0..=size (size + 1 entries). For the size*2 inverse
-        // FFT the positive half is 0..=size; the rest mirror by hermitian sym.
+        let full = &mut self.resample_full;
         for k in 0..=self.size {
             full[k] = self.fft_out[k];
         }
@@ -166,10 +187,10 @@ impl GhaCtx {
             full[k] = self.fft_out[m - k].conj();
         }
         self.fft_inv
-            .process_with_scratch(&mut full, &mut self.inv_scratch);
+            .process_with_scratch(full, &mut self.inv_scratch);
         let scale = self.size as f32;
         for i in 0..m {
-            resampled[i] = full[i].re / scale;
+            self.resampled[i] = self.resample_full[i].re / scale;
         }
     }
 
@@ -183,14 +204,12 @@ impl GhaCtx {
         let bin = self.estimate_bin();
 
         if self.upsample {
-            let mut resampled = vec![0.0f32; self.size * 2];
-            self.resample_fft(&mut resampled);
-            search_omega_newton(&resampled, bin, self.size * 2, info);
+            self.resample_fft();
+            search_omega_newton(&self.resampled, bin, self.size * 2, info);
             info.frequency *= 2.0;
         } else {
             // Operate on the windowed buffer (matches C).
-            let tmp = self.tmp_buf.clone();
-            search_omega_newton(&tmp, bin, self.size, info);
+            search_omega_newton(&self.tmp_buf, bin, self.size, info);
         }
 
         generate_sine(&mut self.tmp_buf, self.size, info.frequency, info.phase);
@@ -251,21 +270,33 @@ impl GhaCtx {
     ) -> i32 {
         let mcols = dim * 3 + 1;
         let mrows = dim * 3;
-        let mut m = vec![0.0f64; mrows * mcols];
-        let mut fx0 = vec![0.0f64; dim * 3];
 
-        let mut ba = vec![0.0f64; dim * sz];
-        let mut bw = vec![0.0f64; dim * sz];
-        let mut bp = vec![0.0f64; dim * sz];
-        let mut baw = vec![0.0f64; dim * sz];
-        let mut bap = vec![0.0f64; dim * sz];
-        let mut bww = vec![0.0f64; dim * sz];
-        let mut bwp = vec![0.0f64; dim * sz];
-        // double here would break precision when work buffer is float (C note).
-        let mut bpp = vec![0.0f32; dim * sz];
+        let max_loops = self.max_loops;
+        let max_magnitude = self.max_magnitude;
 
-        for _loop in 0..self.max_loops {
-            self.tmp_buf[..sz].copy_from_slice(&pcm[..sz]);
+        // Reusable scratch (analog of C's `alloca`): grow to the needed size and
+        // reuse the backing allocation across calls. Every element is written
+        // before it is read each iteration, so stale contents are harmless.
+        // Bound as slices so the optimizer can prove `n < sz` in the hot loops.
+        // `baw`/`bap`/`bwp` from the reference are omitted (dead — see below).
+        self.nm_m.resize(mrows * mcols, 0.0);
+        self.nm_fx0.resize(dim * 3, 0.0);
+        self.nm_ba.resize(dim * sz, 0.0);
+        self.nm_bw.resize(dim * sz, 0.0);
+        self.nm_bp.resize(dim * sz, 0.0);
+        self.nm_bww.resize(dim * sz, 0.0);
+        self.nm_bpp.resize(dim * sz, 0.0);
+        let m: &mut [f64] = &mut self.nm_m;
+        let fx0: &mut [f64] = &mut self.nm_fx0;
+        let ba: &mut [f64] = &mut self.nm_ba;
+        let bw: &mut [f64] = &mut self.nm_bw;
+        let bp: &mut [f64] = &mut self.nm_bp;
+        let bww: &mut [f64] = &mut self.nm_bww;
+        let bpp: &mut [f32] = &mut self.nm_bpp;
+        let tmp_buf: &mut [f32] = &mut self.tmp_buf;
+
+        for _loop in 0..max_loops {
+            tmp_buf[..sz].copy_from_slice(&pcm[..sz]);
 
             for kk in 0..dim {
                 let off = kk * sz;
@@ -276,21 +307,17 @@ impl GhaCtx {
                     let c = t.cos();
 
                     // C: `tmp_buf -= magnitude * s` in f32 (magnitude is float).
-                    self.tmp_buf[n] -= info[kk].magnitude * s;
+                    tmp_buf[n] -= info[kk].magnitude * s;
 
                     ba[off + n] = -(s as f64);
                     bw[off + n] = -ak * (n as f64) * (c as f64);
                     bp[off + n] = -ak * (c as f64);
 
-                    // C computes `-n * c` with `n` as size_t: the unary minus
-                    // wraps unsigned, yielding a huge value. This term only
-                    // feeds an entry that is later overwritten to 0 by the
-                    // symmetrization below, so it is dead — but replicate it
-                    // exactly to stay faithful to the reference.
-                    baw[off + n] = (0usize.wrapping_sub(n) as f32 * c) as f64;
-                    bap[off + n] = -(c as f64);
+                    // `baw`/`bap`/`bwp` from the reference only fed the
+                    // off-diagonal matrix blocks that are unconditionally zeroed
+                    // by symmetrization (see the matrix loop), so they are dead
+                    // and omitted. `bww`/`bpp` feed the live diagonal blocks.
                     bww[off + n] = ak * (n as f64) * (n as f64) * (s as f64);
-                    bwp[off + n] = ak * (n as f64) * (s as f64);
                     bpp[off + n] = (ak * s as f64) as f32;
                 }
             }
@@ -305,47 +332,48 @@ impl GhaCtx {
                 let r2 = mcols * (i + dim * 2);
                 let io = i * sz;
 
+                let tb = &tmp_buf[..sz];
+                let ba_i = &ba[io..io + sz];
+                let bw_i = &bw[io..io + sz];
+                let bp_i = &bp[io..io + sz];
+
                 for j in 0..dim {
+                    // The off-diagonal blocks of the normal-equation matrix —
+                    // m[(0,1)], m[(0,2)], m[(1,2)] — are unconditionally
+                    // overwritten with the (always-zero) lower-triangle blocks
+                    // m[(1,0)], m[(2,0)], m[(2,1)] by the symmetrization below.
+                    // Those blocks are never accumulated, so they stay 0. Hence
+                    // the accumulations into the upper off-diagonal blocks are
+                    // dead and are omitted here; the entries are left at their
+                    // cleared value of 0 (matching the reference output exactly,
+                    // which also zeroes them). Only the block-diagonal entries
+                    // a00 / a11 / a22 survive.
                     if i == j {
+                        let bww_i = &bww[io..io + sz];
+                        let bpp_i = &bpp[io..io + sz];
                         for n in 0..sz {
-                            let tb = self.tmp_buf[n] as f64;
-                            m[r0 + j + dim * 0] += ba[io + n] * ba[io + n];
-                            m[r0 + j + dim * 1] += tb * baw[io + n] + ba[io + n] * bw[io + n];
-                            m[r0 + j + dim * 2] += tb * bap[io + n] + ba[io + n] * bp[io + n];
-
-                            m[r1 + j + dim * 1] += tb * bww[io + n] + bw[io + n] * bw[io + n];
-                            m[r1 + j + dim * 2] += tb * bwp[io + n] + bw[io + n] * bp[io + n];
-
+                            let tbn = tb[n] as f64;
+                            m[r0 + j + dim * 0] += ba_i[n] * ba_i[n];
+                            m[r1 + j + dim * 1] += tbn * bww_i[n] + bw_i[n] * bw_i[n];
                             // C computes tmp_buf(f32) * bpp(f32) in f32 then
                             // promotes; keep that precision exactly.
-                            m[r2 + j + dim * 2] +=
-                                (self.tmp_buf[n] * bpp[io + n]) as f64 + bp[io + n] * bp[io + n];
+                            m[r2 + j + dim * 2] += (tb[n] * bpp_i[n]) as f64 + bp_i[n] * bp_i[n];
                         }
                     } else {
                         let jo = j * sz;
+                        let ba_j = &ba[jo..jo + sz];
+                        let bw_j = &bw[jo..jo + sz];
+                        let bp_j = &bp[jo..jo + sz];
                         for n in 0..sz {
-                            m[r0 + j + dim * 0] += ba[io + n] * ba[jo + n];
-                            m[r0 + j + dim * 1] += ba[io + n] * bw[jo + n];
-                            m[r0 + j + dim * 2] += ba[io + n] * bp[jo + n];
-
-                            m[r1 + j + dim * 1] += bw[io + n] * bw[jo + n];
-                            m[r1 + j + dim * 2] += bw[io + n] * bp[jo + n];
-
-                            m[r2 + j + dim * 2] += bp[io + n] * bp[jo + n];
+                            m[r0 + j + dim * 0] += ba_i[n] * ba_j[n];
+                            m[r1 + j + dim * 1] += bw_i[n] * bw_j[n];
+                            m[r2 + j + dim * 2] += bp_i[n] * bp_j[n];
                         }
                     }
+
                     m[r0 + j + dim * 0] *= 2.0;
-                    m[r0 + j + dim * 1] *= 2.0;
-                    m[r0 + j + dim * 2] *= 2.0;
-
                     m[r1 + j + dim * 1] *= 2.0;
-                    m[r1 + j + dim * 2] *= 2.0;
-
                     m[r2 + j + dim * 2] *= 2.0;
-
-                    m[r0 + j + dim * 1] = m[r1 + j + dim * 0];
-                    m[r0 + j + dim * 2] = m[r2 + j + dim * 0];
-                    m[r1 + j + dim * 2] = m[r2 + j + dim * 1];
                 }
             }
 
@@ -354,11 +382,15 @@ impl GhaCtx {
                 let r1 = mcols * (kk + dim * 1);
                 let r2 = mcols * (kk + dim * 2);
                 let off = kk * sz;
+                let tb = &tmp_buf[..sz];
+                let ba_k = &ba[off..off + sz];
+                let bw_k = &bw[off..off + sz];
+                let bp_k = &bp[off..off + sz];
                 for n in 0..sz {
-                    let tb = self.tmp_buf[n];
-                    m[r0 + dim * 3] += (tb * (ba[off + n] as f32)) as f64;
-                    m[r1 + dim * 3] += (tb * (bw[off + n] as f32)) as f64;
-                    m[r2 + dim * 3] += (tb * (bp[off + n] as f32)) as f64;
+                    let tbn = tb[n];
+                    m[r0 + dim * 3] += (tbn * (ba_k[n] as f32)) as f64;
+                    m[r1 + dim * 3] += (tbn * (bw_k[n] as f32)) as f64;
+                    m[r2 + dim * 3] += (tbn * (bp_k[n] as f32)) as f64;
                 }
                 m[r0 + dim * 3] *= 2.0;
                 m[r1 + dim * 3] *= 2.0;
@@ -368,7 +400,7 @@ impl GhaCtx {
             for v in fx0.iter_mut() {
                 *v = 0.0;
             }
-            if sle_solve(&mut m, dim * 3, &mut fx0) != 0 {
+            if sle_solve(m, dim * 3, fx0) != 0 {
                 return -1;
             }
 
@@ -385,8 +417,8 @@ impl GhaCtx {
                     info[kk].magnitude *= -1.0;
                     info[kk].phase += PI as f32;
                 }
-                if info[kk].magnitude > self.max_magnitude {
-                    info[kk].magnitude = self.max_magnitude * 0.5;
+                if info[kk].magnitude > max_magnitude {
+                    info[kk].magnitude = max_magnitude * 0.5;
                 }
             }
 

@@ -1,4 +1,4 @@
-# Benchmarks for 2026-06-14 13:34:50
+# Benchmarks for 2026-06-14 14:56:10
 
 | Binary | Version |
 |--------|---------|
@@ -20,9 +20,9 @@ project build. Ratio > 1 means Dev is faster.
 
 | Stage | PATH (s) | Dev (s) | Ratio |
 |-------|----------|---------|-------|
-| Encode | 1.524 | 0.766 | **1.98×** |
-| Decode | 0.276 | 0.227 | 1.21× |
-| **Total** | **1.800** | **0.993** | **1.81×** |
+| Encode | 1.491 | 0.707 | **2.10×** |
+| Decode | 0.262 | 0.215 | 1.21× |
+| **Total** | **1.753** | **0.922** | **1.90×** |
 
 ### Output quality
 
@@ -39,8 +39,8 @@ project build. Ratio > 1 means Dev is faster.
 
 | Binary | Time (s) | Ratio |
 |--------|----------|-------|
-| PATH (C++) | 5.606 | — |
-| Dev (Rust) | 2.658 | **2.10×** |
+| PATH (C++) | 5.536 | — |
+| Dev (Rust) | 2.624 | **2.10×** |
 
 ### Output quality
 
@@ -58,8 +58,8 @@ project build. Ratio > 1 means Dev is faster.
 
 | Binary | Time (s) | Ratio |
 |--------|----------|-------|
-| PATH (C++) | 5.931 | — |
-| Dev (Rust) | 2.645 | **2.24×** |
+| PATH (C++) | 5.857 | — |
+| Dev (Rust) | 2.535 | **2.31×** |
 
 ### Output quality
 
@@ -77,8 +77,8 @@ project build. Ratio > 1 means Dev is faster.
 
 | Binary | Time (s) | Ratio |
 |--------|----------|-------|
-| PATH (C++) | 6.301 | — |
-| Dev (Rust) | 2.372 | **2.65×** |
+| PATH (C++) | 6.193 | — |
+| Dev (Rust) | 2.322 | **2.66×** |
 
 ### Output quality
 
@@ -96,8 +96,8 @@ project build. Ratio > 1 means Dev is faster.
 
 | Binary | Time (s) | Ratio |
 |--------|----------|-------|
-| PATH (C++) | 14.426 | — |
-| Dev (Rust) | 14.955 | **0.96×** |
+| PATH (C++) | 14.440 | — |
+| Dev (Rust) | 13.680 | **1.05×** |
 
 ### Output quality
 
@@ -113,11 +113,11 @@ project build. Ratio > 1 means Dev is faster.
 
 | Mode | Codec | Bitrate | PATH (s) | Dev (s) | Speedup | SNR |
 |------|-------|---------|----------|---------|---------|-----|
-| SP | atrac1 | 292 kbps | 1.800¹ | 0.993¹ | **1.81×** | **81.61 dB** |
-| LP2 | atrac3 | 128 kbps | 5.606 | 2.658 | **2.10×** | **33.25 dB** |
-| LP105 | atrac3 | 102 kbps | 5.931 | 2.645 | **2.24×** | **29.37 dB** |
-| LP4 | atrac3_lp4 | 64 kbps | 6.301 | 2.372 | **2.65×** | **27.50 dB** |
-| — | atrac3plus | ~352 kbps | 14.426 | 14.955 | **0.96×** | **41.93 dB** |
+| SP | atrac1 | 292 kbps | 1.753¹ | 0.922¹ | **1.90×** | **81.61 dB** |
+| LP2 | atrac3 | 128 kbps | 5.536 | 2.624 | **2.10×** | **33.25 dB** |
+| LP105 | atrac3 | 102 kbps | 5.857 | 2.535 | **2.31×** | **29.37 dB** |
+| LP4 | atrac3_lp4 | 64 kbps | 6.193 | 2.322 | **2.66×** | **27.50 dB** |
+| — | atrac3plus | ~352 kbps | 14.440 | 13.680 | **1.05×** | **41.93 dB** |
 
 ¹ ATRAC1 times are encode + decode combined.
 

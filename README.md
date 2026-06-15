@@ -3,6 +3,8 @@
 A free LGPL implementation of ATRAC1, ATRAC3, and ATRAC3plus encoders, ported
 from C++ to Rust.
 
+Used by [`rminidisc`](https://github.com/liangchunn/rminidisc).
+
 > [!WARNING]
 > The code in this repository are largely written and reviewed with the aid of AI LLMs.
 >

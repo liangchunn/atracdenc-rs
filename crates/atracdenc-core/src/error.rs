@@ -1,3 +1,9 @@
+//! Crate error type.
+//!
+//! [`AtracdencError`] aggregates the failures surfaced by the codec engine:
+//! I/O, PCM engine, container, and bitstream-encode errors, plus a catch-all
+//! [`AtracdencError::InvalidInput`].
+
 use std::io;
 
 use crate::{

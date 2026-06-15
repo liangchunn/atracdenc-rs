@@ -1,3 +1,10 @@
+//! Compressed-stream container I/O.
+//!
+//! Readers/writers for the supported containers: [`aea`] (ATRAC1 AEA),
+//! [`oma`] (Sony OpenMG), [`at3`] (RIFF/WAV with AT3 fmt), [`rm`] (RealMedia),
+//! and [`raw`] (headerless frames). The [`CompressedInput`]/[`CompressedOutput`]
+//! traits abstract over them; [`ContainerError`] is the shared error type.
+
 use std::io;
 
 pub mod aea;

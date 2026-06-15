@@ -1,3 +1,8 @@
+//! Bit-level stream primitives for the codec bitstreams.
+//!
+//! [`BitStream`] is a big-endian bit reader/writer; [`encode`] adds the
+//! higher-level encode helpers built on top of it.
+
 pub mod encode;
 
 #[derive(Debug, Clone, Default, Eq, PartialEq)]

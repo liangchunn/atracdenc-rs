@@ -1,3 +1,78 @@
+//! Ergonomic ATRAC1/ATRAC3/ATRAC3+ encoding and ATRAC1 decoding.
+//!
+//! `atracdenc` is the high-level facade over [`atracdenc_core`]. It owns the
+//! common encode/decode orchestration, WAV/codec/container validation, and
+//! container inference, exposing it all through two builders:
+//! [`EncodeBuilder`] and [`DecodeBuilder`]. Most consumers want this crate;
+//! reach for [`atracdenc_core`] directly only for low-level or advanced use.
+//!
+//! # Input constraints
+//!
+//! Encoding consumes **44100 Hz, 16-bit, mono or stereo** WAV. No resampling is
+//! performed. Decoding is currently ATRAC1-only, from AEA input.
+//!
+//! # Encoding
+//!
+//! Build an [`EncodeBuilder`], point it at a WAV reader (or raw bytes), pick a
+//! [`Codec`] and optionally a [`Container`] (otherwise inferred), then run.
+//!
+//! ```no_run
+//! use atracdenc::{Codec, Container, EncodeBuilder, Result};
+//!
+//! fn main() -> Result<()> {
+//!     let wav = std::fs::File::open("input.wav").unwrap();
+//!     let out = std::fs::File::create("out.aea").unwrap();
+//!     EncodeBuilder::new()
+//!         .input_reader(wav)
+//!         .output_writer(out)
+//!         .codec(Codec::Atrac1)
+//!         .container(Container::Aea)
+//!         .run()?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Output can also be collected into a `Vec<u8>` instead of a writer:
+//!
+//! ```no_run
+//! use atracdenc::{At3Settings, Codec, EncodeBuilder, Result};
+//!
+//! fn main() -> Result<()> {
+//!     let bytes: Vec<u8> = EncodeBuilder::new()
+//!         .input_bytes(std::fs::read("input.wav").unwrap())
+//!         .codec(Codec::Atrac3) // OMA container inferred
+//!         .at3_settings(At3Settings::default())
+//!         .run_to_vec()?;
+//!     println!("encoded {} bytes", bytes.len());
+//!     Ok(())
+//! }
+//! ```
+//!
+//! # Decoding
+//!
+//! Decoding is ATRAC1-from-AEA only. The output is a 44100 Hz, 16-bit WAV.
+//!
+//! ```no_run
+//! use atracdenc::{Codec, DecodeBuilder, Result};
+//!
+//! fn main() -> Result<()> {
+//!     let wav: Vec<u8> = DecodeBuilder::new()
+//!         .input_bytes(std::fs::read("input.aea").unwrap())
+//!         .codec(Codec::Atrac1)
+//!         .run_to_vec()?;
+//!     std::fs::write("out.wav", wav).unwrap();
+//!     Ok(())
+//! }
+//! ```
+//!
+//! # Codec-specific settings
+//!
+//! [`At1Settings`] and [`At3Settings`] carry the per-codec knobs (window mode,
+//! bitrate, gain/tonal control, BFU allocation, Sony decode-delay alignment).
+//! Settings that do not match the selected [`Codec`] are rejected at
+//! [`EncodeBuilder::run`]/[`EncodeBuilder::run_to_vec`] time with
+//! [`Error::InvalidInput`].
+
 use std::{
     cell::RefCell,
     io::{self, Cursor, Read, Seek, SeekFrom, Write},

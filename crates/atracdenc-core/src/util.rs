@@ -1,3 +1,8 @@
+//! Small spectral and bit-twiddling helpers shared across modules.
+//!
+//! Spectrum manipulation ([`invert_spectr`], [`inverted_spectr`],
+//! [`swap_array`]) and bit utilities ([`get_first_set_bit`]).
+
 pub fn swap_array<T>(s: &mut [T]) {
     s.reverse();
 }

@@ -62,15 +62,6 @@ impl At3pMdctWin {
     }
 }
 
-fn swap_array(p: &mut [f32], len: usize) {
-    let (mut i, mut j) = (0usize, len - 1);
-    while i < len / 2 {
-        p.swap(i, j);
-        i += 1;
-        j -= 1;
-    }
-}
-
 /// History buffer for the forward MDCT (256 floats per subband).
 pub type MdctHistBuf = [[f32; 256]; 16];
 
@@ -124,7 +115,7 @@ impl At3pMdct {
             cur.copy_from_slice(&sp[..128]);
 
             if b & 1 != 0 {
-                swap_array(cur, 128);
+                cur.reverse();
             }
 
             if win.flags & flag != 0 {
@@ -194,7 +185,7 @@ impl At3pMidct {
             let cur = &mut specs[b * 128..b * 128 + 128];
 
             if b & 1 != 0 {
-                swap_array(cur, 128);
+                cur.reverse();
             }
 
             let mut inv = [0.0f32; 256];

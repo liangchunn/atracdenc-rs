@@ -1,11 +1,7 @@
 //! Small spectral and bit-twiddling helpers shared across modules.
 //!
-//! Spectrum manipulation ([`invert_spectr`], [`inverted_spectr`],
-//! [`swap_array`]) and bit utilities ([`get_first_set_bit`]).
-
-pub fn swap_array<T>(s: &mut [T]) {
-    s.reverse();
-}
+//! Spectrum manipulation ([`invert_spectr`], [`inverted_spectr`]) and bit
+//! utilities ([`get_first_set_bit`]).
 
 pub fn invert_spectr(s: &mut [f32]) {
     for sample in s.iter_mut().step_by(2) {
@@ -38,10 +34,6 @@ pub fn calc_median(input: &[f32]) -> f32 {
     tmp[(tmp.len() - 1) / 2]
 }
 
-pub fn calc_energy(input: &[f32]) -> f32 {
-    input.iter().map(|x| x * x).sum()
-}
-
 pub fn to_int(x: f32) -> i32 {
     x.round_ties_even() as i32
 }
@@ -49,15 +41,6 @@ pub fn to_int(x: f32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn swap_array_test() {
-        let mut arr = [0.0_f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-        swap_array(&mut arr);
-        for i in 0..8 {
-            assert!((i as f32 - arr[7 - i]).abs() < 0.000_000_000_001);
-        }
-    }
 
     #[test]
     fn get_first_set_bit_test() {
@@ -71,16 +54,6 @@ mod tests {
         assert_eq!(3, get_first_set_bit(9));
         assert_eq!(3, get_first_set_bit(10));
         assert_eq!(0, get_first_set_bit(0));
-    }
-
-    #[test]
-    fn calc_energy_test() {
-        assert!((0.0 - calc_energy(&[0.0])).abs() < 0.000_000_000_001);
-        assert!((1.0 - calc_energy(&[1.0])).abs() < 0.000_000_000_001);
-        assert!((2.0 - calc_energy(&[1.0, 1.0])).abs() < 0.000_000_000_001);
-        assert!((5.0 - calc_energy(&[2.0, 1.0])).abs() < 0.000_000_000_001);
-        assert!((5.0 - calc_energy(&[1.0, 2.0])).abs() < 0.000_000_000_001);
-        assert!((8.0 - calc_energy(&[2.0, 2.0])).abs() < 0.000_000_000_001);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use crate::{
         gain::{GainPoint, GainProcessor},
         mdct::{Mdct, Midct},
     },
-    util::{get_first_set_bit, swap_array},
+    util::get_first_set_bit,
 };
 
 pub type At3GainProcessor = GainProcessor<At3GainParams>;
@@ -93,7 +93,7 @@ impl Atrac3Mdct {
 
             cur_spec.copy_from_slice(self.mdct512.transform(&tmp));
             if band & 1 != 0 {
-                swap_array(cur_spec);
+                cur_spec.reverse();
             }
             max_levels[band] = max;
         }
@@ -119,7 +119,7 @@ impl Atrac3Mdct {
             let cur_spec = &mut specs[band * 256..band * 256 + 256];
 
             if band & 1 != 0 {
-                swap_array(cur_spec);
+                cur_spec.reverse();
             }
 
             let mut inv = self.midct512.transform(cur_spec).to_vec();

@@ -36,7 +36,7 @@ pub static AMP_SF_TAB: LazyLock<[f32; 64]> = LazyLock::new(|| {
 });
 
 #[inline]
-fn dequant_phase(ph: i32) -> i32 {
+pub(super) fn dequant_phase(ph: i32) -> i32 {
     (ph & 0x1F) << 6
 }
 

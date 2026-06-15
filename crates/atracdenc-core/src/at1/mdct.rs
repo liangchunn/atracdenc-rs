@@ -1,7 +1,6 @@
 use crate::{
     at1::data::{BlockSizeMod, NUM_QMF, SINE_WINDOW},
     dsp::mdct::{Mdct, Midct},
-    util::swap_array,
 };
 
 pub struct Atrac1Mdct {
@@ -84,7 +83,7 @@ impl Atrac1Mdct {
                     specs[block_pos + pos + i] = *x * multiple;
                 }
                 if band != 0 {
-                    swap_array(&mut specs[block_pos + pos..block_pos + pos + sp.len()]);
+                    specs[block_pos + pos..block_pos + pos + sp.len()].reverse();
                 }
                 block_pos += 32;
             }
@@ -121,7 +120,7 @@ impl Atrac1Mdct {
 
             for _ in 0..num_mdct_blocks {
                 if band != 0 {
-                    swap_array(&mut specs[pos..pos + block_sz]);
+                    specs[pos..pos + block_sz].reverse();
                 }
 
                 let inv = if num_mdct_blocks != 1 {

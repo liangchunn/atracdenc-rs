@@ -156,10 +156,6 @@ fn gha_phase_to_index(p: f32) -> u32 {
     (v.round_ties_even() as i64 & 31) as u32
 }
 
-fn phase_index_to_offset(ind: u32) -> u32 {
-    (ind & 0x1F) << 6
-}
-
 fn amplitude_to_sf(amp: f32) -> u32 {
     // upper_bound: first index whose value > amp, then step back one.
     let tab = &*AMP_SF_TAB;
@@ -350,7 +346,7 @@ fn gen_waves(params: &[WaveParam], reg_offset: i32, out: &mut [f32], out_limit: 
         let amp = amp_tab[p.amp_sf as usize];
         let inc = p.freq_index as i32;
         let mut pos =
-            (phase_index_to_offset(p.phase_index) as i32 + (reg_offset ^ 128) * inc) & 2047;
+            (ff_dsp::dequant_phase(p.phase_index as i32) + (reg_offset ^ 128) * inc) & 2047;
         for i in 0..out_limit {
             out[i] += sine[pos as usize] * amp;
             pos = (pos + inc) & 2047;

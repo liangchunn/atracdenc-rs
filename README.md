@@ -1,9 +1,9 @@
-# atracdenc (Rust port)
+# atracdenc-rs
 
 A free LGPL implementation of ATRAC1, ATRAC3, and ATRAC3plus encoders, ported
 from C++ to Rust.
 
-ATRAC, ATRAC3, ATRAC3plus, and their logos are trademarks of Sony Corporation.
+> ATRAC, ATRAC3, ATRAC3plus, and their logos are trademarks of Sony Corporation.
 
 **Original C++ reference:** <https://github.com/dcherednik/atracdenc>  
 **Ported from commit:** [`01234b0`][upstream-commit] ("Add explicit container selection")
@@ -12,20 +12,82 @@ ATRAC, ATRAC3, ATRAC3plus, and their logos are trademarks of Sony Corporation.
 
 ## Crates
 
-| Crate | Type | Description |
-|---|---|---|
-| [`atracdenc`](crates/atracdenc/) | Library | High-level facade: builders, validation, container inference |
-| [`atracdenc-core`](crates/atracdenc-core/) | Library | ATRAC1, ATRAC3, and ATRAC3plus encode/decode engine |
-| [`atracdenc-cli`](crates/atracdenc-cli/) | Binary | CLI frontend (produces the `atracdenc` binary) |
+The workspace contains three crates:
 
-See [`crates/atracdenc/README.md`](crates/atracdenc/README.md) for library API
+| Crate | Cargo package | Type | Audience |
+|---|---|---|---|
+| [`atracdenc-core`](crates/atracdenc-core/) | `atracdenc-core` | Library | Advanced users needing low-level codec, DSP, or container primitives |
+| [`atracdenc`](crates/atracdenc/) | `atracdenc` | Library | Application developers; provides `EncodeBuilder` / `DecodeBuilder` |
+| [`atracdenc-cli`](crates/atracdenc-cli/) | `atracdenc-cli` | Binary | End users running the `atracdenc` command-line tool |
+
+### `atracdenc-core`
+
+Low-level library with ATRAC1/ATRAC3/ATRAC3plus encode/decode primitives, DSP
+routines (MDCT, FFT, QMF, DCT, transient detection), container format I/O (AEA,
+OMA, RIFF/WAV, RealMedia, Raw), and PCM/WAV support. Depends on `hound` for WAV,
+`rustfft` for FFT, and `log` + `thiserror` for diagnostics. Use this crate
+directly only when you need codec internals or container primitives that the
+facade does not expose.
+
+### `atracdenc` (library)
+
+High-level facade crate providing `EncodeBuilder` and `DecodeBuilder`. It
+validates input PCM format, wires the appropriate codec encoder/decoder, selects
+containers, and orchestrates the PCM pipeline. This is the **recommended
+dependency** for applications that want to encode or decode ATRAC files
+programmatically.
+
+> **Note:** The `atracdenc` crate does **not** parse CLI arguments, infer
+> containers from file extensions, or open files. That is handled by
+> `atracdenc-cli` (see below). The facade accepts caller-owned readers, writers,
+> or in-memory byte slices.
+
+**Minimal example — ATRAC1 encode in memory:**
+
+```rust
+use atracdenc::{Codec, EncodeBuilder};
+
+fn main() -> atracdenc::Result<()> {
+    let wav = std::fs::read("input.wav")?;
+    let aea = EncodeBuilder::new()
+        .codec(Codec::Atrac1)
+        .input_bytes(wav)
+        .run_to_vec()?;
+    std::fs::write("output.aea", aea)?;
+    Ok(())
+}
+```
+
+See [`crates/atracdenc/README.md`](crates/atracdenc/README.md) for more API
 examples covering ATRAC1, ATRAC3 LP2, ATRAC3 LP4, and ATRAC3plus usage.
 
-The workspace is a virtual manifest — build the CLI to get the binary:
+### `atracdenc-cli` (binary)
+
+CLI frontend built with clap. It parses command-line arguments, infers the
+output container from the file extension (overridable with `--container`), and
+delegates to the `atracdenc` library for encoding or decoding.
+
+### Naming: `atracdenc` the library vs. `atracdenc` the binary
+
+The Cargo package `atracdenc` (in `crates/atracdenc/`) is a **library**.  
+The Cargo package `atracdenc-cli` (in `crates/atracdenc-cli/`) produces the
+**`atracdenc` binary**.
 
 ```bash
-cargo build --release -p atracdenc-cli
+cargo build --release -p atracdenc-cli    # produces target/release/atracdenc
 ```
+
+If you add `atracdenc` to your `Cargo.toml`, you get the library API (builders,
+validation, container inference) — not the CLI. To build the CLI, use the
+command above or install via `cargo install --path crates/atracdenc-cli`.
+
+## Input Constraints
+
+Encoding input must be a **44100 Hz, 16-bit, mono or stereo WAV** file.
+No resampling or format conversion is performed. Decode currently supports
+ATRAC1 from AEA input only.
+
+These constraints apply to both the CLI and the `atracdenc` library crate.
 
 ## Port Status
 
@@ -35,7 +97,7 @@ cargo build --release -p atracdenc-cli
 | **ATRAC3** (LP2 / LP4) | Yes | No |
 | **ATRAC3plus** | Yes | No |
 
-ATRAC3plus decode is not yet ported.
+ATRAC3 and ATRAC3plus decode are not yet ported.
 
 ## Containers
 
@@ -47,8 +109,19 @@ ATRAC3plus decode is not yet ported.
 | RealMedia | `.rm`, `.ra` | — | Yes | — |
 | Raw frames | `.raw`, `.dat` | Yes | Yes | Yes |
 
-Containers are inferred from the output file extension. Use `--container` to
-override.
+The CLI infers the container from the output file extension; use `--container`
+to override. The `atracdenc` library crate requires an explicit
+`container(...)` call (see below).
+
+## Building
+
+Requires Rust ≥ 1.85 (edition 2024).
+
+```bash
+cargo build --release -p atracdenc-cli
+```
+
+The binary will be at `target/release/atracdenc`.
 
 ## CLI Usage
 
@@ -96,11 +169,9 @@ atracdenc -e atrac1 --notransient 0xff -i in.wav -o out.aea
 RUST_LOG=off atracdenc -e atrac3 -i input.wav -o output.oma
 ```
 
-Input must be 44100 Hz, 16-bit, mono or stereo WAV. Decode only supports ATRAC1
-from AEA input. ATRAC3 uses fast BFU allocation by default; use
-`--at3-bfu-mode parity` when comparing encoder output against the C++
-reference. ATRAC3plus uses GHA-based tonal analysis; pass
-`--advanced ghadbg=<mask>` to control GHA processing flags.
+ATRAC3 uses fast BFU allocation by default; use `--at3-bfu-mode parity` when
+comparing encoder output against the C++ reference. ATRAC3plus uses GHA-based
+tonal analysis; pass `--advanced ghadbg=<mask>` to control GHA processing flags.
 
 ## Sony decode-delay alignment
 
@@ -126,17 +197,6 @@ atracdenc -e atrac3-lp4 --container riff --sony-delay-align -i input.wav -o outp
 See [`docs/sony-delay-alignment.md`](docs/sony-delay-alignment.md) for the full
 investigation, the reverse engineering of Sony's `psp_at3tool.exe`, and the
 implementation details.
-
-
-## Building
-
-Requires Rust 1.96.0 (edition 2024).
-
-```bash
-cargo build --release -p atracdenc-cli
-```
-
-The binary will be at `target/release/atracdenc`.
 
 ## License
 

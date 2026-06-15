@@ -4,7 +4,7 @@ A free LGPL implementation of ATRAC1, ATRAC3, and ATRAC3plus encoders, ported
 from C++ to Rust.
 
 > [!WARNING]
-> The code in this repository are largely written and reviewed with the aid of AI LLMs. 
+> The code in this repository are largely written and reviewed with the aid of AI LLMs.
 >
 > I have personally tested and inspected the outputs by comparing it to Sony's `a3tool` and the reference C++ `atracdenc` outputs, and tested uploads onto a real NetMD device with success.
 >
@@ -19,11 +19,11 @@ from C++ to Rust.
 
 The workspace contains three crates:
 
-| Crate | Cargo package | Type | Audience |
-|---|---|---|---|
+| Crate                                      | Cargo package    | Type    | Audience                                                             |
+| ------------------------------------------ | ---------------- | ------- | -------------------------------------------------------------------- |
 | [`atracdenc-core`](crates/atracdenc-core/) | `atracdenc-core` | Library | Advanced users needing low-level codec, DSP, or container primitives |
-| [`atracdenc`](crates/atracdenc/) | `atracdenc` | Library | Application developers; provides `EncodeBuilder` / `DecodeBuilder` |
-| [`atracdenc-cli`](crates/atracdenc-cli/) | `atracdenc-cli` | Binary | End users running the `atracdenc` command-line tool |
+| [`atracdenc`](crates/atracdenc/)           | `atracdenc`      | Library | Application developers; provides `EncodeBuilder` / `DecodeBuilder`   |
+| [`atracdenc-cli`](crates/atracdenc-cli/)   | `atracdenc-cli`  | Binary  | End users running the `atracdenc` command-line tool                  |
 
 ### `atracdenc-core`
 
@@ -59,7 +59,7 @@ CLI frontend that delegates to the `atracdenc` library for encoding or decoding.
 
 > [!NOTE]
 > The Cargo package `atracdenc` (in `crates/atracdenc/`) is a **library**.
-> 
+>
 > The Cargo package `atracdenc-cli` (in `crates/atracdenc-cli/`) produces the **`atracdenc` binary**.
 
 ```bash
@@ -75,23 +75,23 @@ These constraints apply to both the CLI and the `atracdenc` library crate.
 
 ## Port Status
 
-| Codec | Encode | Decode |
-|---|---|---|
-| **ATRAC1** | Yes | Yes |
-| **ATRAC3** (LP2 / LP4) | Yes | No |
-| **ATRAC3plus** | Yes | No |
+| Codec                  | Encode | Decode |
+| ---------------------- | ------ | ------ |
+| **ATRAC1**             | Yes    | Yes    |
+| **ATRAC3** (LP2 / LP4) | Yes    | No     |
+| **ATRAC3plus**         | Yes    | No     |
 
 Use `ffmpeg` for ATRAC3 and ATRAC3plus decode
 
 ## Containers
 
-| Container | Extension | ATRAC1 | ATRAC3 | ATRAC3plus |
-|---|---|---|---|---|
-| AEA | `.aea` | Yes | — | — |
-| OMA | `.oma`, `.omg` | — | Yes | Yes |
-| RIFF/WAV | `.at3`, `.wav` | — | Yes | Yes |
-| RealMedia | `.rm`, `.ra` | — | Yes | — |
-| Raw frames | `.raw`, `.dat` | Yes | Yes | Yes |
+| Container  | Extension      | ATRAC1 | ATRAC3 | ATRAC3plus |
+| ---------- | -------------- | ------ | ------ | ---------- |
+| AEA        | `.aea`         | Yes    | —      | —          |
+| OMA        | `.oma`, `.omg` | —      | Yes    | Yes        |
+| RIFF/WAV   | `.at3`, `.wav` | —      | Yes    | Yes        |
+| RealMedia  | `.rm`, `.ra`   | —      | Yes    | —          |
+| Raw frames | `.raw`, `.dat` | Yes    | Yes    | Yes        |
 
 The CLI infers the container from the output file extension; use `--container`
 to override. The `atracdenc` library crate requires an explicit
